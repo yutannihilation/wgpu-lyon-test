@@ -12,6 +12,8 @@ use winit::{
 
 use futures::executor::block_on;
 
+const SAMPLE_COUNT: u32 = 4;
+
 // The vertex type that we will use to represent a point on our triangle.
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -35,6 +37,7 @@ struct State {
     // index_count: usize,
     // bind_group: wgpu::BindGroup,
     render_pipeline: wgpu::RenderPipeline,
+    multisampled_framebuffer: wgpu::TextureView,
     // blur_render_pipeline: wgpu::RenderPipeline,
     geometry: VertexBuffers<Vertex, u16>,
     stroke_range: std::ops::Range<u32>,
@@ -120,6 +123,16 @@ impl State {
         // Load shader modules.
         let vs_mod = device.create_shader_module(wgpu::include_spirv!("shaders/shader.vert.spv"));
         let fs_mod = device.create_shader_module(wgpu::include_spirv!("shaders/shader.frag.spv"));
+
+        // MSAA
+        let multisampled_texture_extent = wgpu::Extent3d {
+            width: sc_desc.width,
+            height: sc_desc.height,
+            depth: 1,
+        };
+
+        let multisampled_framebuffer = create_multisampled_framebuffer(&device, &sc_desc);
+
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
             layout: &pipeline_layout,
             vertex_stage: wgpu::ProgrammableStageDescriptor {
@@ -153,7 +166,7 @@ impl State {
                     attributes: &wgpu::vertex_attr_array![0 => Float2],
                 }],
             },
-            sample_count: 1,
+            sample_count: SAMPLE_COUNT,
             sample_mask: !0,
             alpha_to_coverage_enabled: false,
         });
@@ -177,6 +190,7 @@ impl State {
             // index_count,
             // bind_group,
             render_pipeline,
+            multisampled_framebuffer,
             geometry,
             stroke_range,
             size,
@@ -189,6 +203,8 @@ impl State {
         self.sc_desc.width = new_size.width;
         self.sc_desc.height = new_size.height;
         self.swap_chain = self.device.create_swap_chain(&self.surface, &self.sc_desc);
+
+        self.update_multisampled_framebuffer();
     }
 
     fn input(&mut self, event: &WindowEvent) -> bool {
@@ -227,8 +243,8 @@ impl State {
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
-                    attachment: &frame.output.view,
-                    resolve_target: None,
+                    attachment: &self.multisampled_framebuffer,
+                    resolve_target: Some(&frame.output.view),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
                             r: 0.1,
@@ -262,6 +278,35 @@ impl State {
 
         &self.queue.submit(Some(encoder.finish()));
     }
+
+    fn update_multisampled_framebuffer(&mut self) {
+        self.multisampled_framebuffer =
+            create_multisampled_framebuffer(&self.device, &self.sc_desc);
+    }
+}
+
+fn create_multisampled_framebuffer(
+    device: &wgpu::Device,
+    sc_desc: &wgpu::SwapChainDescriptor,
+) -> wgpu::TextureView {
+    let multisampled_texture_extent = wgpu::Extent3d {
+        width: sc_desc.width,
+        height: sc_desc.height,
+        depth: 1,
+    };
+    let multisampled_frame_descriptor = &wgpu::TextureDescriptor {
+        size: multisampled_texture_extent,
+        mip_level_count: 1,
+        sample_count: SAMPLE_COUNT,
+        dimension: wgpu::TextureDimension::D2,
+        format: sc_desc.format,
+        usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT,
+        label: None,
+    };
+
+    device
+        .create_texture(multisampled_frame_descriptor)
+        .create_default_view()
 }
 
 // main() is derived from sotrh/learn-wgpu
