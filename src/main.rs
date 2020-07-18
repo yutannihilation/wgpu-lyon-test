@@ -3,9 +3,6 @@ use lyon::path::Path;
 use lyon::tessellation;
 use lyon::tessellation::geometry_builder::*;
 use lyon::tessellation::{FillOptions, FillTessellator};
-use lyon::tessellation::{StrokeOptions, StrokeTessellator};
-
-use std::ops::Range;
 
 use winit::{
     event::*,
@@ -14,9 +11,6 @@ use winit::{
 };
 
 use futures::executor::block_on;
-use std::ops::Rem;
-
-const PRIM_BUFFER_LEN: usize = 64;
 
 // The vertex type that we will use to represent a point on our triangle.
 #[repr(C)]
@@ -36,15 +30,13 @@ struct State {
     sc_desc: wgpu::SwapChainDescriptor,
     swap_chain: wgpu::SwapChain,
 
-    vertex_buffer: wgpu::Buffer,
-    index_buffer: wgpu::Buffer,
-    index_count: usize,
-    bind_group: wgpu::BindGroup,
-    uniform_buffer: wgpu::Buffer,
-
+    // vertex_buffer: wgpu::Buffer,
+    // index_buffer: wgpu::Buffer,
+    // index_count: usize,
+    // bind_group: wgpu::BindGroup,
     render_pipeline: wgpu::RenderPipeline,
-    blur_render_pipeline: wgpu::RenderPipeline,
-    // geometry: VertexBuffers<Vertex, u16>,
+    // blur_render_pipeline: wgpu::RenderPipeline,
+    geometry: VertexBuffers<Vertex, u16>,
     size: winit::dpi::PhysicalSize<u32>,
 }
 
@@ -118,48 +110,9 @@ impl State {
             )
             .unwrap();
 
-        // Create the render pipeline.
-        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-            label: None,
-            entries: &[wgpu::BindGroupLayoutEntry::new(
-                0,
-                wgpu::ShaderStage::VERTEX,
-                wgpu::BindingType::UniformBuffer {
-                    dynamic: false,
-                    min_binding_size: wgpu::BufferSize::new(PRIM_BUFFER_LEN as u64),
-                },
-            )],
-        });
-
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            bind_group_layouts: &[&bind_group_layout],
+            bind_group_layouts: &[],
             push_constant_ranges: &[],
-        });
-
-        let uniform_buffer = device.create_buffer_with_data(
-            bytemuck::cast_slice(&geometry.vertices),
-            wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
-        );
-
-        let vertex_buffer = device.create_buffer_with_data(
-            bytemuck::cast_slice(&geometry.vertices),
-            wgpu::BufferUsage::VERTEX,
-        );
-
-        let index_buffer = device.create_buffer_with_data(
-            bytemuck::cast_slice(&geometry.indices),
-            wgpu::BufferUsage::INDEX,
-        );
-
-        let index_count = geometry.indices.len();
-
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            label: None,
-            layout: &bind_group_layout,
-            entries: &[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer(uniform_buffer.slice(..)),
-            }],
         });
 
         // Load shader modules.
@@ -203,48 +156,6 @@ impl State {
             alpha_to_coverage_enabled: false,
         });
 
-        let vs_mod_blur =
-            device.create_shader_module(wgpu::include_spirv!("shaders/blur.vert.spv"));
-        let fs_mod_blur =
-            device.create_shader_module(wgpu::include_spirv!("shaders/blur.frag.spv"));
-        let blur_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            layout: &pipeline_layout,
-            vertex_stage: wgpu::ProgrammableStageDescriptor {
-                module: &vs_mod_blur,
-                entry_point: "main",
-            },
-            fragment_stage: Some(wgpu::ProgrammableStageDescriptor {
-                module: &fs_mod_blur,
-                entry_point: "main",
-            }),
-            rasterization_state: Some(wgpu::RasterizationStateDescriptor {
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: wgpu::CullMode::Back,
-                depth_bias: 0,
-                depth_bias_slope_scale: 0.0,
-                depth_bias_clamp: 0.0,
-            }),
-            primitive_topology: wgpu::PrimitiveTopology::TriangleList,
-            color_states: &[wgpu::ColorStateDescriptor {
-                format: sc_desc.format,
-                color_blend: wgpu::BlendDescriptor::REPLACE,
-                alpha_blend: wgpu::BlendDescriptor::REPLACE,
-                write_mask: wgpu::ColorWrite::ALL,
-            }],
-            depth_stencil_state: None,
-            vertex_state: wgpu::VertexStateDescriptor {
-                index_format: wgpu::IndexFormat::Uint16,
-                vertex_buffers: &[wgpu::VertexBufferDescriptor {
-                    stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
-                    step_mode: wgpu::InputStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float2],
-                }],
-            },
-            sample_count: 1,
-            sample_mask: !0,
-            alpha_to_coverage_enabled: false,
-        });
-
         State {
             surface,
             device,
@@ -252,20 +163,18 @@ impl State {
             sc_desc,
             swap_chain,
 
-            vertex_buffer,
-            index_buffer,
-            index_count,
-            bind_group,
-            uniform_buffer,
-
+            // vertex_buffer,
+            // index_buffer,
+            // index_count,
+            // bind_group,
             render_pipeline,
-            blur_render_pipeline,
-            // geometry,
+            geometry,
             size,
         }
     }
 
     fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
+        println!("Resized to {:?}", new_size);
         self.size = new_size;
         self.sc_desc.width = new_size.width;
         self.sc_desc.height = new_size.height;
@@ -295,6 +204,22 @@ impl State {
                 label: Some("Render Encoder"),
             });
 
+        let vertex_buffer = self.device.create_buffer_with_data(
+            bytemuck::cast_slice(&self.geometry.vertices),
+            wgpu::BufferUsage::VERTEX,
+        );
+
+        println!(
+            "length of geometry.indices is {:?}",
+            self.geometry.indices.len()
+        );
+        let index_buffer = self.device.create_buffer_with_data(
+            bytemuck::cast_slice(&self.geometry.indices),
+            wgpu::BufferUsage::INDEX,
+        );
+
+        let index_count = self.geometry.indices.len();
+
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
@@ -313,14 +238,13 @@ impl State {
                 depth_stencil_attachment: None,
             });
 
-            let stroke_range = 0..(self.index_count as u32);
-            render_pass.set_bind_group(0, &self.bind_group, &[]);
+            let stroke_range = 0..(index_count as u32);
+            // render_pass.set_bind_group(0, &self.bind_group, &[]);
 
             render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.set_index_buffer(self.index_buffer.slice(..));
-            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+            render_pass.set_index_buffer(index_buffer.slice(..));
+            render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
 
-            // render_pass.draw_indexed(model.fill_range.clone(), 0, 0..1);
             render_pass.draw_indexed(stroke_range.clone(), 0, 0..1);
 
             // render_pass_blur.set_bind_group(0, &model.bind_group, &[]);
