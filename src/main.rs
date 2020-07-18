@@ -1,0 +1,383 @@
+use lyon::math::point;
+use lyon::path::Path;
+use lyon::tessellation;
+use lyon::tessellation::geometry_builder::*;
+use lyon::tessellation::{FillOptions, FillTessellator};
+use lyon::tessellation::{StrokeOptions, StrokeTessellator};
+
+use std::ops::Range;
+
+use winit::{
+    event::*,
+    event_loop::{ControlFlow, EventLoop},
+    window::{Window, WindowBuilder},
+};
+
+use futures::executor::block_on;
+use std::ops::Rem;
+
+const PRIM_BUFFER_LEN: usize = 64;
+
+// The vertex type that we will use to represent a point on our triangle.
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct Vertex {
+    position: [f32; 2],
+}
+
+unsafe impl bytemuck::Pod for Vertex {}
+unsafe impl bytemuck::Zeroable for Vertex {}
+
+// State is derived from sotrh/learn-wgpu
+struct State {
+    surface: wgpu::Surface,
+    device: wgpu::Device,
+    queue: wgpu::Queue,
+    sc_desc: wgpu::SwapChainDescriptor,
+    swap_chain: wgpu::SwapChain,
+
+    vertex_buffer: wgpu::Buffer,
+    index_buffer: wgpu::Buffer,
+    index_count: usize,
+    bind_group: wgpu::BindGroup,
+    uniform_buffer: wgpu::Buffer,
+
+    render_pipeline: wgpu::RenderPipeline,
+    blur_render_pipeline: wgpu::RenderPipeline,
+    // geometry: VertexBuffers<Vertex, u16>,
+    size: winit::dpi::PhysicalSize<u32>,
+}
+
+impl State {
+    async fn new(window: &Window) -> Self {
+        // create an instance
+        let instance = wgpu::Instance::new(wgpu::BackendBit::PRIMARY);
+
+        // create an surface
+        let (size, surface) = unsafe {
+            let size = window.inner_size();
+            let surface = instance.create_surface(window);
+            (size, surface)
+        };
+
+        // create an adapter
+        let adapter = instance
+            .request_adapter(&wgpu::RequestAdapterOptions {
+                power_preference: wgpu::PowerPreference::Default,
+                compatible_surface: Some(&surface),
+            })
+            .await
+            .unwrap();
+
+        // create a device and a queue
+        let (device, queue) = adapter
+            .request_device(
+                &wgpu::DeviceDescriptor {
+                    features: wgpu::Features::default(),
+                    limits: wgpu::Limits::default(),
+                    shader_validation: true,
+                },
+                // trace_path can be used for API call tracing
+                None,
+            )
+            .await
+            .unwrap();
+
+        // create a swap chain
+        let sc_desc = wgpu::SwapChainDescriptor {
+            usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT,
+            // TODO: Allow srgb unconditionally
+            format: wgpu::TextureFormat::Bgra8UnormSrgb,
+            width: size.width,
+            height: size.height,
+            present_mode: wgpu::PresentMode::Mailbox,
+        };
+        let swap_chain = device.create_swap_chain(&surface, &sc_desc);
+
+        // Build a Path.
+        let mut builder = Path::builder();
+        builder.begin(point(-0.8, -0.3));
+        builder.quadratic_bezier_to(point(1.5, 2.3), point(0.2, -0.9));
+        builder.end(false);
+        let path = builder.build();
+
+        let mut geometry: VertexBuffers<Vertex, u16> = VertexBuffers::new();
+
+        let tolerance = 0.0001;
+
+        let mut fill_tess = FillTessellator::new();
+        fill_tess
+            .tessellate_path(
+                &path,
+                &FillOptions::tolerance(tolerance).with_fill_rule(tessellation::FillRule::NonZero),
+                &mut BuffersBuilder::new(&mut geometry, |vertex: tessellation::FillVertex| {
+                    Vertex {
+                        position: vertex.position().to_array(),
+                    }
+                }),
+            )
+            .unwrap();
+
+        // Create the render pipeline.
+        let bind_group_layout = device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+            label: None,
+            entries: &[wgpu::BindGroupLayoutEntry::new(
+                0,
+                wgpu::ShaderStage::VERTEX,
+                wgpu::BindingType::UniformBuffer {
+                    dynamic: false,
+                    min_binding_size: wgpu::BufferSize::new(PRIM_BUFFER_LEN as u64),
+                },
+            )],
+        });
+
+        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            bind_group_layouts: &[&bind_group_layout],
+            push_constant_ranges: &[],
+        });
+
+        let uniform_buffer = device.create_buffer_with_data(
+            bytemuck::cast_slice(&geometry.vertices),
+            wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
+        );
+
+        let vertex_buffer = device.create_buffer_with_data(
+            bytemuck::cast_slice(&geometry.vertices),
+            wgpu::BufferUsage::VERTEX,
+        );
+
+        let index_buffer = device.create_buffer_with_data(
+            bytemuck::cast_slice(&geometry.indices),
+            wgpu::BufferUsage::INDEX,
+        );
+
+        let index_count = geometry.indices.len();
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            label: None,
+            layout: &bind_group_layout,
+            entries: &[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(uniform_buffer.slice(..)),
+            }],
+        });
+
+        // Load shader modules.
+        let vs_mod = device.create_shader_module(wgpu::include_spirv!("shaders/shader.vert.spv"));
+        let fs_mod = device.create_shader_module(wgpu::include_spirv!("shaders/shader.frag.spv"));
+        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            layout: &pipeline_layout,
+            vertex_stage: wgpu::ProgrammableStageDescriptor {
+                module: &vs_mod,
+                entry_point: "main",
+            },
+            fragment_stage: Some(wgpu::ProgrammableStageDescriptor {
+                module: &fs_mod,
+                entry_point: "main",
+            }),
+            rasterization_state: Some(wgpu::RasterizationStateDescriptor {
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: wgpu::CullMode::Back,
+                depth_bias: 0,
+                depth_bias_slope_scale: 0.0,
+                depth_bias_clamp: 0.0,
+            }),
+            primitive_topology: wgpu::PrimitiveTopology::TriangleList,
+            color_states: &[wgpu::ColorStateDescriptor {
+                format: sc_desc.format,
+                color_blend: wgpu::BlendDescriptor::REPLACE,
+                alpha_blend: wgpu::BlendDescriptor::REPLACE,
+                write_mask: wgpu::ColorWrite::ALL,
+            }],
+            depth_stencil_state: None,
+            vertex_state: wgpu::VertexStateDescriptor {
+                index_format: wgpu::IndexFormat::Uint16,
+                vertex_buffers: &[wgpu::VertexBufferDescriptor {
+                    stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
+                    step_mode: wgpu::InputStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float2],
+                }],
+            },
+            sample_count: 1,
+            sample_mask: !0,
+            alpha_to_coverage_enabled: false,
+        });
+
+        let vs_mod_blur =
+            device.create_shader_module(wgpu::include_spirv!("shaders/blur.vert.spv"));
+        let fs_mod_blur =
+            device.create_shader_module(wgpu::include_spirv!("shaders/blur.frag.spv"));
+        let blur_render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+            layout: &pipeline_layout,
+            vertex_stage: wgpu::ProgrammableStageDescriptor {
+                module: &vs_mod_blur,
+                entry_point: "main",
+            },
+            fragment_stage: Some(wgpu::ProgrammableStageDescriptor {
+                module: &fs_mod_blur,
+                entry_point: "main",
+            }),
+            rasterization_state: Some(wgpu::RasterizationStateDescriptor {
+                front_face: wgpu::FrontFace::Ccw,
+                cull_mode: wgpu::CullMode::Back,
+                depth_bias: 0,
+                depth_bias_slope_scale: 0.0,
+                depth_bias_clamp: 0.0,
+            }),
+            primitive_topology: wgpu::PrimitiveTopology::TriangleList,
+            color_states: &[wgpu::ColorStateDescriptor {
+                format: sc_desc.format,
+                color_blend: wgpu::BlendDescriptor::REPLACE,
+                alpha_blend: wgpu::BlendDescriptor::REPLACE,
+                write_mask: wgpu::ColorWrite::ALL,
+            }],
+            depth_stencil_state: None,
+            vertex_state: wgpu::VertexStateDescriptor {
+                index_format: wgpu::IndexFormat::Uint16,
+                vertex_buffers: &[wgpu::VertexBufferDescriptor {
+                    stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
+                    step_mode: wgpu::InputStepMode::Vertex,
+                    attributes: &wgpu::vertex_attr_array![0 => Float2],
+                }],
+            },
+            sample_count: 1,
+            sample_mask: !0,
+            alpha_to_coverage_enabled: false,
+        });
+
+        State {
+            surface,
+            device,
+            queue,
+            sc_desc,
+            swap_chain,
+
+            vertex_buffer,
+            index_buffer,
+            index_count,
+            bind_group,
+            uniform_buffer,
+
+            render_pipeline,
+            blur_render_pipeline,
+            // geometry,
+            size,
+        }
+    }
+
+    fn resize(&mut self, new_size: winit::dpi::PhysicalSize<u32>) {
+        self.size = new_size;
+        self.sc_desc.width = new_size.width;
+        self.sc_desc.height = new_size.height;
+        self.swap_chain = self.device.create_swap_chain(&self.surface, &self.sc_desc);
+    }
+
+    fn input(&mut self, event: &WindowEvent) -> bool {
+        false
+    }
+
+    fn update(&mut self) {}
+
+    fn render(&mut self) {
+        let frame = match self.swap_chain.get_next_frame() {
+            Ok(frame) => frame,
+            Err(_) => {
+                self.swap_chain = self.device.create_swap_chain(&self.surface, &self.sc_desc);
+                self.swap_chain
+                    .get_next_frame()
+                    .expect("Failed to acquire next swap chain texture!")
+            }
+        };
+
+        let mut encoder = self
+            .device
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
+                label: Some("Render Encoder"),
+            });
+
+        {
+            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
+                    attachment: &frame.output.view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.1,
+                            g: 0.2,
+                            b: 0.3,
+                            a: 1.0,
+                        }),
+                        store: true,
+                    },
+                }],
+                depth_stencil_attachment: None,
+            });
+
+            let stroke_range = 0..(self.index_count as u32);
+            render_pass.set_bind_group(0, &self.bind_group, &[]);
+
+            render_pass.set_pipeline(&self.render_pipeline);
+            render_pass.set_index_buffer(self.index_buffer.slice(..));
+            render_pass.set_vertex_buffer(0, self.vertex_buffer.slice(..));
+
+            // render_pass.draw_indexed(model.fill_range.clone(), 0, 0..1);
+            render_pass.draw_indexed(stroke_range.clone(), 0, 0..1);
+
+            // render_pass_blur.set_bind_group(0, &model.bind_group, &[]);
+
+            // render_pass_blur.set_pipeline(&model.blur_render_pipeline);
+            // render_pass_blur.set_index_buffer(&index_buffer, 0, 0);
+            // render_pass_blur.set_vertex_buffer(0, &vertex_buffer, 0, 0);
+
+            // // render_pass.draw_indexed(model.fill_range.clone(), 0, 0..1);
+            // render_pass_blur.draw_indexed(stroke_range.clone(), 0, 0..1);
+        }
+
+        &self.queue.submit(Some(encoder.finish()));
+    }
+}
+
+// main() is derived from sotrh/learn-wgpu
+fn main() {
+    let event_loop = EventLoop::new();
+    let window = WindowBuilder::new()
+        .with_title("test")
+        .build(&event_loop)
+        .unwrap();
+
+    // Since main can't be async, we're going to need to block
+    let mut state = block_on(State::new(&window));
+
+    event_loop.run(move |event, _, control_flow| {
+        match event {
+            Event::WindowEvent {
+                ref event,
+                window_id,
+            } if window_id == window.id() => {
+                if !state.input(event) {
+                    match event {
+                        WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
+                        WindowEvent::Resized(physical_size) => {
+                            state.resize(*physical_size);
+                        }
+                        WindowEvent::ScaleFactorChanged { new_inner_size, .. } => {
+                            // new_inner_size is &mut so w have to dereference it twice
+                            state.resize(**new_inner_size);
+                        }
+                        _ => {}
+                    }
+                }
+            }
+            Event::RedrawRequested(_) => {
+                state.update();
+                state.render();
+            }
+            Event::MainEventsCleared => {
+                // RedrawRequested will only trigger once, unless we manually
+                // request it.
+                window.request_redraw();
+            }
+            _ => {}
+        }
+    });
+}
