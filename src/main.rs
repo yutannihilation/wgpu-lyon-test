@@ -3,6 +3,7 @@ use lyon::path::Path;
 use lyon::tessellation;
 use lyon::tessellation::geometry_builder::*;
 use lyon::tessellation::{FillOptions, FillTessellator};
+use lyon::tessellation::{StrokeOptions, StrokeTessellator};
 
 use winit::{
     event::*,
@@ -37,6 +38,8 @@ struct State {
     render_pipeline: wgpu::RenderPipeline,
     // blur_render_pipeline: wgpu::RenderPipeline,
     geometry: VertexBuffers<Vertex, u16>,
+    stroke_range: std::ops::Range<u32>,
+
     size: winit::dpi::PhysicalSize<u32>,
 }
 
@@ -79,10 +82,10 @@ impl State {
         let sc_desc = wgpu::SwapChainDescriptor {
             usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT,
             // TODO: Allow srgb unconditionally
-            format: wgpu::TextureFormat::Bgra8UnormSrgb,
+            format: wgpu::TextureFormat::Bgra8Unorm,
             width: size.width,
             height: size.height,
-            present_mode: wgpu::PresentMode::Mailbox,
+            present_mode: wgpu::PresentMode::Fifo,
         };
         let swap_chain = device.create_swap_chain(&surface, &sc_desc);
 
@@ -98,11 +101,24 @@ impl State {
         let tolerance = 0.0001;
 
         let mut fill_tess = FillTessellator::new();
-        fill_tess
+        let fill_count = fill_tess
             .tessellate_path(
                 &path,
                 &FillOptions::tolerance(tolerance).with_fill_rule(tessellation::FillRule::NonZero),
                 &mut BuffersBuilder::new(&mut geometry, |vertex: tessellation::FillVertex| {
+                    Vertex {
+                        position: vertex.position().to_array(),
+                    }
+                }),
+            )
+            .unwrap();
+
+        let mut stroke_tess = StrokeTessellator::new();
+        stroke_tess
+            .tessellate_path(
+                &path,
+                &StrokeOptions::tolerance(tolerance).with_line_width(0.13),
+                &mut BuffersBuilder::new(&mut geometry, |vertex: tessellation::StrokeVertex| {
                     Vertex {
                         position: vertex.position().to_array(),
                     }
@@ -130,7 +146,7 @@ impl State {
             }),
             rasterization_state: Some(wgpu::RasterizationStateDescriptor {
                 front_face: wgpu::FrontFace::Ccw,
-                cull_mode: wgpu::CullMode::Back,
+                cull_mode: wgpu::CullMode::None,
                 depth_bias: 0,
                 depth_bias_slope_scale: 0.0,
                 depth_bias_clamp: 0.0,
@@ -156,6 +172,14 @@ impl State {
             alpha_to_coverage_enabled: false,
         });
 
+        let index_count = geometry.indices.len();
+        println!("index_count: {:?}", index_count);
+        let stroke_range = fill_count.indices..(index_count as u32);
+        geometry.indices.extend(std::iter::repeat(0).take(
+            wgpu::COPY_BUFFER_ALIGNMENT as usize
+                - geometry.indices.len() % wgpu::COPY_BUFFER_ALIGNMENT as usize,
+        ));
+
         State {
             surface,
             device,
@@ -169,6 +193,7 @@ impl State {
             // bind_group,
             render_pipeline,
             geometry,
+            stroke_range,
             size,
         }
     }
@@ -209,16 +234,10 @@ impl State {
             wgpu::BufferUsage::VERTEX,
         );
 
-        println!(
-            "length of geometry.indices is {:?}",
-            self.geometry.indices.len()
-        );
         let index_buffer = self.device.create_buffer_with_data(
             bytemuck::cast_slice(&self.geometry.indices),
             wgpu::BufferUsage::INDEX,
         );
-
-        let index_count = self.geometry.indices.len();
 
         {
             let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -238,14 +257,13 @@ impl State {
                 depth_stencil_attachment: None,
             });
 
-            let stroke_range = 0..(index_count as u32);
             // render_pass.set_bind_group(0, &self.bind_group, &[]);
 
             render_pass.set_pipeline(&self.render_pipeline);
             render_pass.set_index_buffer(index_buffer.slice(..));
             render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
 
-            render_pass.draw_indexed(stroke_range.clone(), 0, 0..1);
+            render_pass.draw_indexed(self.stroke_range.clone(), 0, 0..1);
 
             // render_pass_blur.set_bind_group(0, &model.bind_group, &[]);
 
