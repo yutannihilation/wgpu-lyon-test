@@ -2,7 +2,6 @@ use lyon::math::point;
 use lyon::path::Path;
 use lyon::tessellation;
 use lyon::tessellation::geometry_builder::*;
-use lyon::tessellation::{FillOptions, FillTessellator};
 use lyon::tessellation::{StrokeOptions, StrokeTessellator};
 
 use winit::{
@@ -100,19 +99,6 @@ impl State {
 
         let tolerance = 0.0001;
 
-        let mut fill_tess = FillTessellator::new();
-        let fill_count = fill_tess
-            .tessellate_path(
-                &path,
-                &FillOptions::tolerance(tolerance).with_fill_rule(tessellation::FillRule::NonZero),
-                &mut BuffersBuilder::new(&mut geometry, |vertex: tessellation::FillVertex| {
-                    Vertex {
-                        position: vertex.position().to_array(),
-                    }
-                }),
-            )
-            .unwrap();
-
         let mut stroke_tess = StrokeTessellator::new();
         stroke_tess
             .tessellate_path(
@@ -172,9 +158,8 @@ impl State {
             alpha_to_coverage_enabled: false,
         });
 
-        let index_count = geometry.indices.len();
-        println!("index_count: {:?}", index_count);
-        let stroke_range = fill_count.indices..(index_count as u32);
+        // extend the buffer to the alined size
+        let stroke_range = 0..(geometry.indices.len() as u32);
         geometry.indices.extend(std::iter::repeat(0).take(
             wgpu::COPY_BUFFER_ALIGNMENT as usize
                 - geometry.indices.len() % wgpu::COPY_BUFFER_ALIGNMENT as usize,
