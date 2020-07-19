@@ -125,12 +125,6 @@ impl State {
         let fs_mod = device.create_shader_module(wgpu::include_spirv!("shaders/shader.frag.spv"));
 
         // MSAA
-        let multisampled_texture_extent = wgpu::Extent3d {
-            width: sc_desc.width,
-            height: sc_desc.height,
-            depth: 1,
-        };
-
         let multisampled_framebuffer = create_multisampled_framebuffer(&device, &sc_desc);
 
         let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -171,12 +165,15 @@ impl State {
             alpha_to_coverage_enabled: false,
         });
 
-        // extend the buffer to the alined size
+        // extend the index data to the alined size
         let stroke_range = 0..(geometry.indices.len() as u32);
-        geometry.indices.extend(std::iter::repeat(0).take(
-            wgpu::COPY_BUFFER_ALIGNMENT as usize
-                - geometry.indices.len() % wgpu::COPY_BUFFER_ALIGNMENT as usize,
-        ));
+        let alignment = wgpu::COPY_BUFFER_ALIGNMENT as usize / std::mem::size_of::<u16>();
+        let fraction = geometry.indices.len() % alignment;
+        if fraction > 0 {
+            geometry
+                .indices
+                .extend(std::iter::repeat(0).take(alignment - fraction));
+        }
 
         State {
             surface,
@@ -247,9 +244,9 @@ impl State {
                     resolve_target: Some(&frame.output.view),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.1,
-                            g: 0.2,
-                            b: 0.3,
+                            r: 0.05,
+                            g: 0.01,
+                            b: 0.02,
                             a: 1.0,
                         }),
                         store: true,
