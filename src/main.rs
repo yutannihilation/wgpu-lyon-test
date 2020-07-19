@@ -333,6 +333,14 @@ fn main() {
                             // new_inner_size is &mut so w have to dereference it twice
                             state.resize(**new_inner_size);
                         }
+                        WindowEvent::KeyboardInput { input, .. } => match input {
+                            KeyboardInput {
+                                state: ElementState::Pressed,
+                                virtual_keycode: Some(VirtualKeyCode::Escape),
+                                ..
+                            } => *control_flow = ControlFlow::Exit,
+                            _ => {}
+                        },
                         _ => {}
                     }
                 }
