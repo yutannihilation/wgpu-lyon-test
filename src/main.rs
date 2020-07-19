@@ -103,7 +103,6 @@ impl State {
         // create a swap chain
         let sc_desc = wgpu::SwapChainDescriptor {
             usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT,
-            // TODO: Allow srgb unconditionally
             format: wgpu::TextureFormat::Bgra8Unorm,
             width: size.width,
             height: size.height,
