@@ -12,7 +12,7 @@ use winit::{
 
 use futures::executor::block_on;
 
-const SAMPLE_COUNT: u32 = 4;
+const SAMPLE_COUNT: u32 = 1;
 
 // The vertex type that we will use to represent a point on our triangle.
 #[repr(C)]
@@ -125,7 +125,7 @@ impl State {
                         wgpu::BindingType::SampledTexture {
                             multisampled: false,
                             dimension: wgpu::TextureViewDimension::D2,
-                            component_type: wgpu::TextureComponentType::Uint,
+                            component_type: wgpu::TextureComponentType::Float,
                         },
                     ),
                     wgpu::BindGroupLayoutEntry::new(
@@ -146,7 +146,8 @@ impl State {
 
         // For blur, we do use bind_group_layout
         let blur_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            bind_group_layouts: &[&blur_bind_group_layout],
+            // bind_group_layouts: &[&blur_bind_group_layout],
+            bind_group_layouts: &[],
             push_constant_ranges: &[],
         });
 
@@ -243,18 +244,12 @@ impl State {
             wgpu::BufferUsage::INDEX,
         );
 
-        let bind_group = create_bind_group(
-            &self.device,
-            &self.blur_bind_group_layout,
-            &self.staging_texture,
-        );
-
-        let texture_view = self.staging_texture.create_default_view();
+        let staging_texture_view = self.staging_texture.create_default_view();
         // draw staging buffer
         {
             let mut staging_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
-                    attachment: &texture_view,
+                    attachment: &staging_texture_view,
                     // attachment: &frame.output.view,
                     resolve_target: None,
                     ops: wgpu::Operations {
@@ -277,33 +272,39 @@ impl State {
             staging_render_pass.draw_indexed(self.stroke_range.clone(), 0, 0..1);
         }
 
-        &self.queue.submit(Some(encoder.finish()));
+        let bind_group = create_bind_group(
+            &self.device,
+            &self.blur_bind_group_layout,
+            &self.staging_texture,
+        );
 
-        // {
-        // let mut blur_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-        //     color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
-        //         attachment: &frame.output.view,
-        //         resolve_target: None,
-        //         ops: wgpu::Operations {
-        //             load: wgpu::LoadOp::Clear(wgpu::Color {
-        //                 r: 0.05,
-        //                 g: 0.01,
-        //                 b: 0.02,
-        //                 a: 1.0,
-        //             }),
-        //             store: true,
-        //         },
-        //     }],
-        //     depth_stencil_attachment: None,
-        // });
-        // blur_render_pass.set_bind_group(0, &self.bind_group, &[]);
+        {
+            let mut blur_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
+                    attachment: &frame.output.view,
+                    resolve_target: None,
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color {
+                            r: 0.05,
+                            g: 0.01,
+                            b: 0.02,
+                            a: 1.0,
+                        }),
+                        store: true,
+                    },
+                }],
+                depth_stencil_attachment: None,
+            });
 
-        // blur_render_pass.set_pipeline(&self.blur_render_pipeline);
-        // blur_render_pass.set_index_buffer(&index_buffer, 0, 0);
-        // blur_render_pass.set_vertex_buffer(0, &vertex_buffer, 0, 0);
+            blur_render_pass.set_pipeline(&self.blur_render_pipeline);
+            blur_render_pass.set_bind_group(0, &bind_group, &[]);
+            blur_render_pass.set_index_buffer(index_buffer.slice(..));
+            blur_render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
 
-        // blur_render_pass.draw_indexed(stroke_range.clone(), 0, 0..1);
-        // }
+            blur_render_pass.draw_indexed(self.stroke_range.clone(), 0, 0..1);
+        }
+
+        self.queue.submit(Some(encoder.finish()));
     }
 }
 
