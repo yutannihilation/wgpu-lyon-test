@@ -8,4 +8,5 @@ layout(set = 0, binding = 1) uniform sampler s_staging;
 
 void main() {
     f_color = texture(sampler2D(t_staging, s_staging), v_tex_coords);
+    // f_color = vec4(v_tex_coords, 1.0, 0.5);
 }

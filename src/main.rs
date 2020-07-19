@@ -24,6 +24,25 @@ struct Vertex {
 unsafe impl bytemuck::Pod for Vertex {}
 unsafe impl bytemuck::Zeroable for Vertex {}
 
+#[repr(C)]
+#[derive(Clone, Copy)]
+struct BlurVertex {
+    position: [f32; 2],
+    tex_coords: [f32; 2],
+}
+
+unsafe impl bytemuck::Pod for BlurVertex {}
+unsafe impl bytemuck::Zeroable for BlurVertex {}
+
+#[rustfmt::skip]
+const VERTICES: &[BlurVertex] = &[
+   BlurVertex { position: [-0.0868241,   0.49240386], tex_coords: [0.4131759,    1.0 - 0.99240386 ], }, // A
+//    BlurVertex { position: [-0.49513406,  0.06958647], tex_coords: [0.0048659444, 1.0 - 0.56958646 ], }, // B
+   BlurVertex { position: [-0.21918549, -0.44939706], tex_coords: [0.28081453,   1.0 - 0.050602943], }, // C
+   BlurVertex { position: [ 0.35966998, -0.3473291 ], tex_coords: [0.85967,      1.0 - 0.15267089 ], }, // D
+//    BlurVertex { position: [ 0.44147372,  0.2347359 ], tex_coords: [0.9414737,    1.0 - 0.7347359  ], }, // E
+];
+
 // State is derived from sotrh/learn-wgpu
 struct State {
     surface: wgpu::Surface,
@@ -160,6 +179,7 @@ impl State {
             &sc_desc,
             &device.create_shader_module(wgpu::include_spirv!("shaders/shader.vert.spv")),
             &device.create_shader_module(wgpu::include_spirv!("shaders/shader.frag.spv")),
+            &wgpu::vertex_attr_array![0 => Float2],
         );
 
         let blur_render_pipeline = create_render_pipeline(
@@ -168,6 +188,7 @@ impl State {
             &sc_desc,
             &device.create_shader_module(wgpu::include_spirv!("shaders/blur.vert.spv")),
             &device.create_shader_module(wgpu::include_spirv!("shaders/blur.frag.spv")),
+            &wgpu::vertex_attr_array![0 => Float2, 1 => Float2],
         );
 
         // extend the index data to the alined size
@@ -278,6 +299,10 @@ impl State {
             &self.staging_texture,
         );
 
+        let vertex_pentagon = self
+            .device
+            .create_buffer_with_data(bytemuck::cast_slice(&VERTICES), wgpu::BufferUsage::VERTEX);
+
         {
             let mut blur_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
@@ -298,10 +323,10 @@ impl State {
 
             blur_render_pass.set_pipeline(&self.blur_render_pipeline);
             blur_render_pass.set_bind_group(0, &bind_group, &[]);
-            blur_render_pass.set_index_buffer(index_buffer.slice(..));
-            blur_render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+            // blur_render_pass.set_index_buffer(index_buffer.slice(..));
+            blur_render_pass.set_vertex_buffer(0, vertex_pentagon.slice(..));
 
-            blur_render_pass.draw_indexed(self.stroke_range.clone(), 0, 0..1);
+            blur_render_pass.draw(0..VERTICES.len() as u32, 0..1);
         }
 
         self.queue.submit(Some(encoder.finish()));
@@ -358,6 +383,7 @@ fn create_render_pipeline(
     sc_desc: &wgpu::SwapChainDescriptor,
     vs_mod: &wgpu::ShaderModule,
     fs_mod: &wgpu::ShaderModule,
+    attr_array: &[wgpu::VertexAttributeDescriptor],
 ) -> wgpu::RenderPipeline {
     // Load shader modules.
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -390,7 +416,7 @@ fn create_render_pipeline(
             vertex_buffers: &[wgpu::VertexBufferDescriptor {
                 stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
                 step_mode: wgpu::InputStepMode::Vertex,
-                attributes: &wgpu::vertex_attr_array![0 => Float2],
+                attributes: attr_array,
             }],
         },
         sample_count: SAMPLE_COUNT,
