@@ -12,7 +12,7 @@ use winit::{
 
 use futures::executor::block_on;
 
-const SAMPLE_COUNT: u32 = 4;
+const SAMPLE_COUNT: u32 = 1;
 
 // The vertex type that we will use to represent a point on our triangle.
 #[repr(C)]
@@ -37,7 +37,7 @@ struct State {
     // index_count: usize,
     // bind_group: wgpu::BindGroup,
     render_pipeline: wgpu::RenderPipeline,
-    multisampled_framebuffer: wgpu::TextureView,
+    staging_buffer: wgpu::TextureView,
     blur_render_pipeline: wgpu::RenderPipeline,
     geometry: VertexBuffers<Vertex, u16>,
     stroke_range: std::ops::Range<u32>,
@@ -115,13 +115,51 @@ impl State {
             )
             .unwrap();
 
+        let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
+
+        let blur_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                entries: &[
+                    wgpu::BindGroupLayoutEntry::new(
+                        0,
+                        wgpu::ShaderStage::FRAGMENT,
+                        wgpu::BindingType::SampledTexture {
+                            multisampled: false,
+                            dimension: wgpu::TextureViewDimension::D2,
+                            component_type: wgpu::TextureComponentType::Uint,
+                        },
+                    ),
+                    wgpu::BindGroupLayoutEntry::new(
+                        1,
+                        wgpu::ShaderStage::FRAGMENT,
+                        wgpu::BindingType::Sampler { comparison: false },
+                    ),
+                ],
+                label: Some("staging"),
+            });
+
         let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            // bind_group_layouts: &[&blur_bind_group_layout],
             bind_group_layouts: &[],
             push_constant_ranges: &[],
         });
 
-        // MSAA
-        let multisampled_framebuffer = create_multisampled_framebuffer(&device, &sc_desc);
+        let staging_buffer = create_framebuffer(&device, &sc_desc);
+
+        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &blur_bind_group_layout,
+            entries: &[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&staging_buffer),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ],
+            label: Some("staging"),
+        });
 
         let render_pipeline = create_render_pipeline(
             &device,
@@ -161,7 +199,7 @@ impl State {
             // index_count,
             // bind_group,
             render_pipeline,
-            multisampled_framebuffer,
+            staging_buffer,
             blur_render_pipeline,
             geometry,
             stroke_range,
@@ -176,8 +214,7 @@ impl State {
         self.sc_desc.height = new_size.height;
         self.swap_chain = self.device.create_swap_chain(&self.surface, &self.sc_desc);
 
-        self.multisampled_framebuffer =
-            create_multisampled_framebuffer(&self.device, &self.sc_desc);
+        self.staging_buffer = create_framebuffer(&self.device, &self.sc_desc);
     }
 
     fn input(&mut self, _: &WindowEvent) -> bool {
@@ -213,11 +250,12 @@ impl State {
             wgpu::BufferUsage::INDEX,
         );
 
+        // draw staging buffer
         {
-            let mut render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut staging_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
-                    attachment: &self.multisampled_framebuffer,
-                    resolve_target: Some(&frame.output.view),
+                    attachment: &self.staging_buffer,
+                    resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
                             r: 0.05,
@@ -231,49 +269,64 @@ impl State {
                 depth_stencil_attachment: None,
             });
 
-            // render_pass.set_bind_group(0, &self.bind_group, &[]);
+            staging_render_pass.set_pipeline(&self.render_pipeline);
+            staging_render_pass.set_index_buffer(index_buffer.slice(..));
+            staging_render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
 
-            render_pass.set_pipeline(&self.render_pipeline);
-            render_pass.set_index_buffer(index_buffer.slice(..));
-            render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
-
-            render_pass.draw_indexed(self.stroke_range.clone(), 0, 0..1);
-
-            // render_pass_blur.set_bind_group(0, &model.bind_group, &[]);
-
-            // render_pass_blur.set_pipeline(&model.blur_render_pipeline);
-            // render_pass_blur.set_index_buffer(&index_buffer, 0, 0);
-            // render_pass_blur.set_vertex_buffer(0, &vertex_buffer, 0, 0);
-
-            // // render_pass.draw_indexed(model.fill_range.clone(), 0, 0..1);
-            // render_pass_blur.draw_indexed(stroke_range.clone(), 0, 0..1);
+            staging_render_pass.draw_indexed(self.stroke_range.clone(), 0, 0..1);
         }
 
         &self.queue.submit(Some(encoder.finish()));
+
+        {
+            // let mut blur_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            //     color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
+            //         attachment: &frame.output.view,
+            //         resolve_target: None,
+            //         ops: wgpu::Operations {
+            //             load: wgpu::LoadOp::Clear(wgpu::Color {
+            //                 r: 0.05,
+            //                 g: 0.01,
+            //                 b: 0.02,
+            //                 a: 1.0,
+            //             }),
+            //             store: true,
+            //         },
+            //     }],
+            //     depth_stencil_attachment: None,
+            // });
+            // blur_render_pass.set_bind_group(0, &self.bind_group, &[]);
+
+            // blur_render_pass.set_pipeline(&self.blur_render_pipeline);
+            // blur_render_pass.set_index_buffer(&index_buffer, 0, 0);
+            // blur_render_pass.set_vertex_buffer(0, &vertex_buffer, 0, 0);
+
+            // blur_render_pass.draw_indexed(stroke_range.clone(), 0, 0..1);
+        }
     }
 }
 
-fn create_multisampled_framebuffer(
+fn create_framebuffer(
     device: &wgpu::Device,
     sc_desc: &wgpu::SwapChainDescriptor,
 ) -> wgpu::TextureView {
-    let multisampled_texture_extent = wgpu::Extent3d {
+    let texture_extent = wgpu::Extent3d {
         width: sc_desc.width,
         height: sc_desc.height,
         depth: 1,
     };
-    let multisampled_frame_descriptor = &wgpu::TextureDescriptor {
-        size: multisampled_texture_extent,
+    let frame_descriptor = &wgpu::TextureDescriptor {
+        size: texture_extent,
         mip_level_count: 1,
         sample_count: SAMPLE_COUNT,
         dimension: wgpu::TextureDimension::D2,
         format: sc_desc.format,
-        usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT,
+        usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT | wgpu::TextureUsage::SAMPLED,
         label: None,
     };
 
     device
-        .create_texture(multisampled_frame_descriptor)
+        .create_texture(frame_descriptor)
         .create_default_view()
 }
 
