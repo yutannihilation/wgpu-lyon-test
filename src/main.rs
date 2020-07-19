@@ -176,10 +176,11 @@ impl State {
         self.sc_desc.height = new_size.height;
         self.swap_chain = self.device.create_swap_chain(&self.surface, &self.sc_desc);
 
-        self.update_multisampled_framebuffer();
+        self.multisampled_framebuffer =
+            create_multisampled_framebuffer(&self.device, &self.sc_desc);
     }
 
-    fn input(&mut self, event: &WindowEvent) -> bool {
+    fn input(&mut self, _: &WindowEvent) -> bool {
         false
     }
 
@@ -249,11 +250,6 @@ impl State {
         }
 
         &self.queue.submit(Some(encoder.finish()));
-    }
-
-    fn update_multisampled_framebuffer(&mut self) {
-        self.multisampled_framebuffer =
-            create_multisampled_framebuffer(&self.device, &self.sc_desc);
     }
 }
 
