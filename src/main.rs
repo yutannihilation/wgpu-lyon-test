@@ -12,7 +12,7 @@ use winit::{
 
 use futures::executor::block_on;
 
-const SAMPLE_COUNT: u32 = 1;
+const SAMPLE_COUNT: u32 = 4;
 
 // The vertex type that we will use to represent a point on our triangle.
 #[repr(C)]
@@ -36,9 +36,10 @@ struct State {
     // index_buffer: wgpu::Buffer,
     // index_count: usize,
     // bind_group: wgpu::BindGroup,
-    render_pipeline: wgpu::RenderPipeline,
-    staging_buffer: wgpu::TextureView,
+    blur_bind_group_layout: wgpu::BindGroupLayout,
+    staging_render_pipeline: wgpu::RenderPipeline,
     blur_render_pipeline: wgpu::RenderPipeline,
+    staging_texture: wgpu::Texture,
     geometry: VertexBuffers<Vertex, u16>,
     stroke_range: std::ops::Range<u32>,
 
@@ -115,8 +116,6 @@ impl State {
             )
             .unwrap();
 
-        let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
-
         let blur_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 entries: &[
@@ -138,32 +137,25 @@ impl State {
                 label: Some("staging"),
             });
 
-        let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            // bind_group_layouts: &[&blur_bind_group_layout],
-            bind_group_layouts: &[],
+        // For staging buffer, we don't use bindgroups
+        let staging_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                bind_group_layouts: &[],
+                push_constant_ranges: &[],
+            });
+
+        // For blur, we do use bind_group_layout
+        let blur_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+            bind_group_layouts: &[&blur_bind_group_layout],
             push_constant_ranges: &[],
         });
 
-        let staging_buffer = create_framebuffer(&device, &sc_desc);
+        let staging_texture = create_framebuffer(&device, &sc_desc);
+        // let bind_group = create_bind_group(&device, &blur_bind_group_layout, &staging_texture);
 
-        let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &blur_bind_group_layout,
-            entries: &[
-                wgpu::BindGroupEntry {
-                    binding: 0,
-                    resource: wgpu::BindingResource::TextureView(&staging_buffer),
-                },
-                wgpu::BindGroupEntry {
-                    binding: 1,
-                    resource: wgpu::BindingResource::Sampler(&sampler),
-                },
-            ],
-            label: Some("staging"),
-        });
-
-        let render_pipeline = create_render_pipeline(
+        let staging_render_pipeline = create_render_pipeline(
             &device,
-            &pipeline_layout,
+            &staging_pipeline_layout,
             &sc_desc,
             &device.create_shader_module(wgpu::include_spirv!("shaders/shader.vert.spv")),
             &device.create_shader_module(wgpu::include_spirv!("shaders/shader.frag.spv")),
@@ -171,7 +163,7 @@ impl State {
 
         let blur_render_pipeline = create_render_pipeline(
             &device,
-            &pipeline_layout,
+            &blur_pipeline_layout,
             &sc_desc,
             &device.create_shader_module(wgpu::include_spirv!("shaders/blur.vert.spv")),
             &device.create_shader_module(wgpu::include_spirv!("shaders/blur.frag.spv")),
@@ -198,8 +190,9 @@ impl State {
             // index_buffer,
             // index_count,
             // bind_group,
-            render_pipeline,
-            staging_buffer,
+            blur_bind_group_layout,
+            staging_render_pipeline,
+            staging_texture,
             blur_render_pipeline,
             geometry,
             stroke_range,
@@ -214,7 +207,7 @@ impl State {
         self.sc_desc.height = new_size.height;
         self.swap_chain = self.device.create_swap_chain(&self.surface, &self.sc_desc);
 
-        self.staging_buffer = create_framebuffer(&self.device, &self.sc_desc);
+        self.staging_texture = create_framebuffer(&self.device, &self.sc_desc);
     }
 
     fn input(&mut self, _: &WindowEvent) -> bool {
@@ -250,11 +243,19 @@ impl State {
             wgpu::BufferUsage::INDEX,
         );
 
+        let bind_group = create_bind_group(
+            &self.device,
+            &self.blur_bind_group_layout,
+            &self.staging_texture,
+        );
+
+        let texture_view = self.staging_texture.create_default_view();
         // draw staging buffer
         {
             let mut staging_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
-                    attachment: &self.staging_buffer,
+                    attachment: &texture_view,
+                    // attachment: &frame.output.view,
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
@@ -269,7 +270,7 @@ impl State {
                 depth_stencil_attachment: None,
             });
 
-            staging_render_pass.set_pipeline(&self.render_pipeline);
+            staging_render_pass.set_pipeline(&self.staging_render_pipeline);
             staging_render_pass.set_index_buffer(index_buffer.slice(..));
             staging_render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
 
@@ -278,38 +279,35 @@ impl State {
 
         &self.queue.submit(Some(encoder.finish()));
 
-        {
-            // let mut blur_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-            //     color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
-            //         attachment: &frame.output.view,
-            //         resolve_target: None,
-            //         ops: wgpu::Operations {
-            //             load: wgpu::LoadOp::Clear(wgpu::Color {
-            //                 r: 0.05,
-            //                 g: 0.01,
-            //                 b: 0.02,
-            //                 a: 1.0,
-            //             }),
-            //             store: true,
-            //         },
-            //     }],
-            //     depth_stencil_attachment: None,
-            // });
-            // blur_render_pass.set_bind_group(0, &self.bind_group, &[]);
+        // {
+        // let mut blur_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+        //     color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
+        //         attachment: &frame.output.view,
+        //         resolve_target: None,
+        //         ops: wgpu::Operations {
+        //             load: wgpu::LoadOp::Clear(wgpu::Color {
+        //                 r: 0.05,
+        //                 g: 0.01,
+        //                 b: 0.02,
+        //                 a: 1.0,
+        //             }),
+        //             store: true,
+        //         },
+        //     }],
+        //     depth_stencil_attachment: None,
+        // });
+        // blur_render_pass.set_bind_group(0, &self.bind_group, &[]);
 
-            // blur_render_pass.set_pipeline(&self.blur_render_pipeline);
-            // blur_render_pass.set_index_buffer(&index_buffer, 0, 0);
-            // blur_render_pass.set_vertex_buffer(0, &vertex_buffer, 0, 0);
+        // blur_render_pass.set_pipeline(&self.blur_render_pipeline);
+        // blur_render_pass.set_index_buffer(&index_buffer, 0, 0);
+        // blur_render_pass.set_vertex_buffer(0, &vertex_buffer, 0, 0);
 
-            // blur_render_pass.draw_indexed(stroke_range.clone(), 0, 0..1);
-        }
+        // blur_render_pass.draw_indexed(stroke_range.clone(), 0, 0..1);
+        // }
     }
 }
 
-fn create_framebuffer(
-    device: &wgpu::Device,
-    sc_desc: &wgpu::SwapChainDescriptor,
-) -> wgpu::TextureView {
+fn create_framebuffer(device: &wgpu::Device, sc_desc: &wgpu::SwapChainDescriptor) -> wgpu::Texture {
     let texture_extent = wgpu::Extent3d {
         width: sc_desc.width,
         height: sc_desc.height,
@@ -325,9 +323,32 @@ fn create_framebuffer(
         label: None,
     };
 
-    device
-        .create_texture(frame_descriptor)
-        .create_default_view()
+    device.create_texture(frame_descriptor)
+}
+
+fn create_bind_group(
+    device: &wgpu::Device,
+    bind_group_layout: &wgpu::BindGroupLayout,
+    staging_texture: &wgpu::Texture,
+) -> wgpu::BindGroup {
+    let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
+
+    device.create_bind_group(&wgpu::BindGroupDescriptor {
+        layout: bind_group_layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(
+                    &staging_texture.create_default_view(),
+                ),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(&sampler),
+            },
+        ],
+        label: Some("staging"),
+    })
 }
 
 fn create_render_pipeline(
