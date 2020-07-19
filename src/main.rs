@@ -36,11 +36,13 @@ unsafe impl bytemuck::Zeroable for BlurVertex {}
 
 #[rustfmt::skip]
 const VERTICES: &[BlurVertex] = &[
-   BlurVertex { position: [-0.0868241,   0.49240386], tex_coords: [0.4131759,    1.0 - 0.99240386 ], }, // A
-//    BlurVertex { position: [-0.49513406,  0.06958647], tex_coords: [0.0048659444, 1.0 - 0.56958646 ], }, // B
-   BlurVertex { position: [-0.21918549, -0.44939706], tex_coords: [0.28081453,   1.0 - 0.050602943], }, // C
-   BlurVertex { position: [ 0.35966998, -0.3473291 ], tex_coords: [0.85967,      1.0 - 0.15267089 ], }, // D
-//    BlurVertex { position: [ 0.44147372,  0.2347359 ], tex_coords: [0.9414737,    1.0 - 0.7347359  ], }, // E
+    BlurVertex { position: [-1.0,  1.0], tex_coords: [0.0, 0.0], },
+    BlurVertex { position: [ 1.0,  1.0], tex_coords: [1.0, 0.0], },
+    BlurVertex { position: [-1.0, -1.0], tex_coords: [0.0, 1.0], },
+
+    BlurVertex { position: [ 1.0, -1.0], tex_coords: [1.0, 1.0], },
+    BlurVertex { position: [ 1.0,  1.0], tex_coords: [1.0, 0.0], },
+    BlurVertex { position: [-1.0, -1.0], tex_coords: [0.0, 1.0], },
 ];
 
 // State is derived from sotrh/learn-wgpu
@@ -164,8 +166,7 @@ impl State {
 
         // For blur, we do use bind_group_layout
         let blur_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            // bind_group_layouts: &[&blur_bind_group_layout],
-            bind_group_layouts: &[],
+            bind_group_layouts: &[&blur_bind_group_layout],
             push_constant_ranges: &[],
         });
 
@@ -274,10 +275,10 @@ impl State {
                     resolve_target: None,
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.05,
-                            g: 0.01,
-                            b: 0.02,
-                            a: 1.0,
+                            r: 0.23,
+                            g: 0.23,
+                            b: 0.23,
+                            a: 0.5,
                         }),
                         store: true,
                     },
@@ -298,7 +299,7 @@ impl State {
             &self.staging_texture,
         );
 
-        let vertex_pentagon = self
+        let vertex_square = self
             .device
             .create_buffer_with_data(bytemuck::cast_slice(&VERTICES), wgpu::BufferUsage::VERTEX);
 
@@ -323,7 +324,7 @@ impl State {
             blur_render_pass.set_pipeline(&self.blur_render_pipeline);
             blur_render_pass.set_bind_group(0, &bind_group, &[]);
             // blur_render_pass.set_index_buffer(index_buffer.slice(..));
-            blur_render_pass.set_vertex_buffer(0, vertex_pentagon.slice(..));
+            blur_render_pass.set_vertex_buffer(0, vertex_square.slice(..));
 
             blur_render_pass.draw(0..VERTICES.len() as u32, 0..1);
         }
@@ -357,15 +358,14 @@ fn create_bind_group(
     staging_texture: &wgpu::Texture,
 ) -> wgpu::BindGroup {
     let sampler = device.create_sampler(&wgpu::SamplerDescriptor::default());
+    let staging_texture_view = staging_texture.create_default_view();
 
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         layout: bind_group_layout,
         entries: &[
             wgpu::BindGroupEntry {
                 binding: 0,
-                resource: wgpu::BindingResource::TextureView(
-                    &staging_texture.create_default_view(),
-                ),
+                resource: wgpu::BindingResource::TextureView(&staging_texture_view),
             },
             wgpu::BindGroupEntry {
                 binding: 1,
