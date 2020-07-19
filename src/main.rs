@@ -38,7 +38,7 @@ struct State {
     // bind_group: wgpu::BindGroup,
     render_pipeline: wgpu::RenderPipeline,
     multisampled_framebuffer: wgpu::TextureView,
-    // blur_render_pipeline: wgpu::RenderPipeline,
+    blur_render_pipeline: wgpu::RenderPipeline,
     geometry: VertexBuffers<Vertex, u16>,
     stroke_range: std::ops::Range<u32>,
 
@@ -120,50 +120,24 @@ impl State {
             push_constant_ranges: &[],
         });
 
-        // Load shader modules.
-        let vs_mod = device.create_shader_module(wgpu::include_spirv!("shaders/shader.vert.spv"));
-        let fs_mod = device.create_shader_module(wgpu::include_spirv!("shaders/shader.frag.spv"));
-
         // MSAA
         let multisampled_framebuffer = create_multisampled_framebuffer(&device, &sc_desc);
 
-        let render_pipeline = device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
-            layout: &pipeline_layout,
-            vertex_stage: wgpu::ProgrammableStageDescriptor {
-                module: &vs_mod,
-                entry_point: "main",
-            },
-            fragment_stage: Some(wgpu::ProgrammableStageDescriptor {
-                module: &fs_mod,
-                entry_point: "main",
-            }),
-            rasterization_state: Some(wgpu::RasterizationStateDescriptor {
-                front_face: wgpu::FrontFace::Ccw,
-                cull_mode: wgpu::CullMode::None,
-                depth_bias: 0,
-                depth_bias_slope_scale: 0.0,
-                depth_bias_clamp: 0.0,
-            }),
-            primitive_topology: wgpu::PrimitiveTopology::TriangleList,
-            color_states: &[wgpu::ColorStateDescriptor {
-                format: sc_desc.format,
-                color_blend: wgpu::BlendDescriptor::REPLACE,
-                alpha_blend: wgpu::BlendDescriptor::REPLACE,
-                write_mask: wgpu::ColorWrite::ALL,
-            }],
-            depth_stencil_state: None,
-            vertex_state: wgpu::VertexStateDescriptor {
-                index_format: wgpu::IndexFormat::Uint16,
-                vertex_buffers: &[wgpu::VertexBufferDescriptor {
-                    stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
-                    step_mode: wgpu::InputStepMode::Vertex,
-                    attributes: &wgpu::vertex_attr_array![0 => Float2],
-                }],
-            },
-            sample_count: SAMPLE_COUNT,
-            sample_mask: !0,
-            alpha_to_coverage_enabled: false,
-        });
+        let render_pipeline = create_render_pipeline(
+            &device,
+            &pipeline_layout,
+            &sc_desc,
+            &device.create_shader_module(wgpu::include_spirv!("shaders/shader.vert.spv")),
+            &device.create_shader_module(wgpu::include_spirv!("shaders/shader.frag.spv")),
+        );
+
+        let blur_render_pipeline = create_render_pipeline(
+            &device,
+            &pipeline_layout,
+            &sc_desc,
+            &device.create_shader_module(wgpu::include_spirv!("shaders/blur.vert.spv")),
+            &device.create_shader_module(wgpu::include_spirv!("shaders/blur.frag.spv")),
+        );
 
         // extend the index data to the alined size
         let stroke_range = 0..(geometry.indices.len() as u32);
@@ -188,6 +162,7 @@ impl State {
             // bind_group,
             render_pipeline,
             multisampled_framebuffer,
+            blur_render_pipeline,
             geometry,
             stroke_range,
             size,
@@ -304,6 +279,53 @@ fn create_multisampled_framebuffer(
     device
         .create_texture(multisampled_frame_descriptor)
         .create_default_view()
+}
+
+fn create_render_pipeline(
+    device: &wgpu::Device,
+    pipeline_layout: &wgpu::PipelineLayout,
+    sc_desc: &wgpu::SwapChainDescriptor,
+    vs_mod: &wgpu::ShaderModule,
+    fs_mod: &wgpu::ShaderModule,
+) -> wgpu::RenderPipeline {
+    // Load shader modules.
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        layout: pipeline_layout,
+        vertex_stage: wgpu::ProgrammableStageDescriptor {
+            module: &vs_mod,
+            entry_point: "main",
+        },
+        fragment_stage: Some(wgpu::ProgrammableStageDescriptor {
+            module: &fs_mod,
+            entry_point: "main",
+        }),
+        rasterization_state: Some(wgpu::RasterizationStateDescriptor {
+            front_face: wgpu::FrontFace::Ccw,
+            cull_mode: wgpu::CullMode::None,
+            depth_bias: 0,
+            depth_bias_slope_scale: 0.0,
+            depth_bias_clamp: 0.0,
+        }),
+        primitive_topology: wgpu::PrimitiveTopology::TriangleList,
+        color_states: &[wgpu::ColorStateDescriptor {
+            format: sc_desc.format,
+            color_blend: wgpu::BlendDescriptor::REPLACE,
+            alpha_blend: wgpu::BlendDescriptor::REPLACE,
+            write_mask: wgpu::ColorWrite::ALL,
+        }],
+        depth_stencil_state: None,
+        vertex_state: wgpu::VertexStateDescriptor {
+            index_format: wgpu::IndexFormat::Uint16,
+            vertex_buffers: &[wgpu::VertexBufferDescriptor {
+                stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
+                step_mode: wgpu::InputStepMode::Vertex,
+                attributes: &wgpu::vertex_attr_array![0 => Float2],
+            }],
+        },
+        sample_count: SAMPLE_COUNT,
+        sample_mask: !0,
+        alpha_to_coverage_enabled: false,
+    })
 }
 
 // main() is derived from sotrh/learn-wgpu
