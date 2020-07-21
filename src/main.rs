@@ -12,7 +12,7 @@ use winit::{
 
 use futures::executor::block_on;
 
-const SAMPLE_COUNT: u32 = 1;
+const SAMPLE_COUNT: u32 = 4;
 
 // The vertex type that we will use to represent a point on our triangle.
 #[repr(C)]
@@ -61,6 +61,7 @@ struct State {
     staging_render_pipeline: wgpu::RenderPipeline,
     blur_render_pipeline: wgpu::RenderPipeline,
     staging_texture: wgpu::Texture,
+    multisample_texture: wgpu::Texture,
     geometry: VertexBuffers<Vertex, u16>,
     stroke_range: std::ops::Range<u32>,
 
@@ -143,7 +144,7 @@ impl State {
                         0,
                         wgpu::ShaderStage::FRAGMENT,
                         wgpu::BindingType::SampledTexture {
-                            multisampled: false,
+                            multisampled: true,
                             dimension: wgpu::TextureViewDimension::D2,
                             component_type: wgpu::TextureComponentType::Float,
                         },
@@ -170,7 +171,8 @@ impl State {
             push_constant_ranges: &[],
         });
 
-        let staging_texture = create_framebuffer(&device, &sc_desc);
+        let staging_texture = create_framebuffer(&device, &sc_desc, 1);
+        let multisample_texture = create_framebuffer(&device, &sc_desc, SAMPLE_COUNT);
         // let bind_group = create_bind_group(&device, &blur_bind_group_layout, &staging_texture);
 
         let staging_render_pipeline = create_render_pipeline(
@@ -180,6 +182,7 @@ impl State {
             &device.create_shader_module(wgpu::include_spirv!("shaders/shader.vert.spv")),
             &device.create_shader_module(wgpu::include_spirv!("shaders/shader.frag.spv")),
             &wgpu::vertex_attr_array![0 => Float2],
+            SAMPLE_COUNT,
         );
 
         let blur_render_pipeline = create_render_pipeline(
@@ -189,6 +192,7 @@ impl State {
             &device.create_shader_module(wgpu::include_spirv!("shaders/blur.vert.spv")),
             &device.create_shader_module(wgpu::include_spirv!("shaders/blur.frag.spv")),
             &wgpu::vertex_attr_array![0 => Float2, 1 => Float2],
+            SAMPLE_COUNT,
         );
 
         // extend the index data to the alined size
@@ -215,6 +219,7 @@ impl State {
             blur_bind_group_layout,
             staging_render_pipeline,
             staging_texture,
+            multisample_texture,
             blur_render_pipeline,
             geometry,
             stroke_range,
@@ -229,7 +234,8 @@ impl State {
         self.sc_desc.height = new_size.height;
         self.swap_chain = self.device.create_swap_chain(&self.surface, &self.sc_desc);
 
-        self.staging_texture = create_framebuffer(&self.device, &self.sc_desc);
+        self.staging_texture = create_framebuffer(&self.device, &self.sc_desc, 1);
+        self.multisample_texture = create_framebuffer(&self.device, &self.sc_desc, SAMPLE_COUNT);
     }
 
     fn input(&mut self, _: &WindowEvent) -> bool {
@@ -266,13 +272,14 @@ impl State {
         );
 
         let staging_texture_view = self.staging_texture.create_default_view();
+        let multisample_texture_view = &self.multisample_texture.create_default_view();
         // draw staging buffer
         {
             let mut staging_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
-                    attachment: &staging_texture_view,
+                    attachment: &multisample_texture_view,
                     // attachment: &frame.output.view,
-                    resolve_target: None,
+                    resolve_target: Some(&staging_texture_view),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
                             r: 0.23,
@@ -306,8 +313,8 @@ impl State {
         {
             let mut blur_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
-                    attachment: &frame.output.view,
-                    resolve_target: None,
+                    attachment: multisample_texture_view,
+                    resolve_target: Some(&frame.output.view),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
                             r: 0.05,
@@ -333,7 +340,11 @@ impl State {
     }
 }
 
-fn create_framebuffer(device: &wgpu::Device, sc_desc: &wgpu::SwapChainDescriptor) -> wgpu::Texture {
+fn create_framebuffer(
+    device: &wgpu::Device,
+    sc_desc: &wgpu::SwapChainDescriptor,
+    sample_count: u32,
+) -> wgpu::Texture {
     let texture_extent = wgpu::Extent3d {
         width: sc_desc.width,
         height: sc_desc.height,
@@ -342,7 +353,7 @@ fn create_framebuffer(device: &wgpu::Device, sc_desc: &wgpu::SwapChainDescriptor
     let frame_descriptor = &wgpu::TextureDescriptor {
         size: texture_extent,
         mip_level_count: 1,
-        sample_count: SAMPLE_COUNT,
+        sample_count: sample_count,
         dimension: wgpu::TextureDimension::D2,
         format: sc_desc.format,
         usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT | wgpu::TextureUsage::SAMPLED,
@@ -383,6 +394,7 @@ fn create_render_pipeline(
     vs_mod: &wgpu::ShaderModule,
     fs_mod: &wgpu::ShaderModule,
     attr_array: &[wgpu::VertexAttributeDescriptor],
+    sample_count: u32,
 ) -> wgpu::RenderPipeline {
     // Load shader modules.
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
@@ -418,7 +430,7 @@ fn create_render_pipeline(
                 attributes: attr_array,
             }],
         },
-        sample_count: SAMPLE_COUNT,
+        sample_count: sample_count,
         sample_mask: !0,
         alpha_to_coverage_enabled: false,
     })
