@@ -6,7 +6,10 @@ spirv = $(addsuffix .spv,$(vert) $(frag))
 
 default: all
 
-all: $(spirv)
+all: $(spirv) cargo
+
+cargo:
+	cargo run --release
 
 %.vert.spv: %.vert
 	glslangValidator -V $< -o $@

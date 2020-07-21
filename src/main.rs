@@ -28,7 +28,7 @@ unsafe impl bytemuck::Zeroable for Vertex {}
 #[derive(Clone, Copy)]
 struct BlurVertex {
     position: [f32; 2],
-    tex_coords: [f32; 2],
+    // tex_coords: [f32; 2],
 }
 
 unsafe impl bytemuck::Pod for BlurVertex {}
@@ -36,13 +36,13 @@ unsafe impl bytemuck::Zeroable for BlurVertex {}
 
 #[rustfmt::skip]
 const VERTICES: &[BlurVertex] = &[
-    BlurVertex { position: [-1.0,  1.0], tex_coords: [0.0, 0.0], },
-    BlurVertex { position: [ 1.0,  1.0], tex_coords: [1.0, 0.0], },
-    BlurVertex { position: [-1.0, -1.0], tex_coords: [0.0, 1.0], },
+    BlurVertex { position: [ 1.0,  1.0], },
+    BlurVertex { position: [-1.0, -1.0], },
+    BlurVertex { position: [ 1.0, -1.0], },
 
-    BlurVertex { position: [ 1.0, -1.0], tex_coords: [1.0, 1.0], },
-    BlurVertex { position: [ 1.0,  1.0], tex_coords: [1.0, 0.0], },
-    BlurVertex { position: [-1.0, -1.0], tex_coords: [0.0, 1.0], },
+    BlurVertex { position: [ 1.0,  1.0], },
+    BlurVertex { position: [-1.0, -1.0], },
+    BlurVertex { position: [-1.0,  1.0], },
 ];
 
 // State is derived from sotrh/learn-wgpu

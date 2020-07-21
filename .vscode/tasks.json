@@ -3,14 +3,7 @@
     "tasks": [
         {
             "type": "shell",
-            "command": "cargo",
-            "args": [
-                "run",
-                "--release"
-            ],
-            "options": {
-                "cwd": "${fileDirname}"
-            },
+            "command": "make",
             "problemMatcher": [
                 "$rustc"
             ],
