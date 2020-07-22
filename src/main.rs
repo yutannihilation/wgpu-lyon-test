@@ -66,6 +66,9 @@ struct State {
     stroke_range: std::ops::Range<u32>,
 
     size: winit::dpi::PhysicalSize<u32>,
+
+    blank: bool,
+    frame: u64,
 }
 
 impl State {
@@ -171,8 +174,8 @@ impl State {
             push_constant_ranges: &[],
         });
 
-        let staging_texture = create_framebuffer(&device, &sc_desc, 1);
-        let multisample_texture = create_framebuffer(&device, &sc_desc, SAMPLE_COUNT);
+        let staging_texture = create_framebuffer(&device, &sc_desc, 1, false);
+        let multisample_texture = create_framebuffer(&device, &sc_desc, SAMPLE_COUNT, true);
         // let bind_group = create_bind_group(&device, &blur_bind_group_layout, &staging_texture);
 
         let staging_render_pipeline = create_render_pipeline(
@@ -224,6 +227,9 @@ impl State {
             geometry,
             stroke_range,
             size,
+
+            blank: true,
+            frame: 0,
         }
     }
 
@@ -234,8 +240,10 @@ impl State {
         self.sc_desc.height = new_size.height;
         self.swap_chain = self.device.create_swap_chain(&self.surface, &self.sc_desc);
 
-        self.staging_texture = create_framebuffer(&self.device, &self.sc_desc, 1);
-        self.multisample_texture = create_framebuffer(&self.device, &self.sc_desc, SAMPLE_COUNT);
+        self.staging_texture = create_framebuffer(&self.device, &self.sc_desc, 1, false);
+        self.multisample_texture =
+            create_framebuffer(&self.device, &self.sc_desc, SAMPLE_COUNT, true);
+        self.blank = true;
     }
 
     fn input(&mut self, _: &WindowEvent) -> bool {
@@ -274,7 +282,7 @@ impl State {
         let staging_texture_view = self.staging_texture.create_default_view();
         let multisample_texture_view = &self.multisample_texture.create_default_view();
         // draw staging buffer
-        {
+        if self.blank {
             let mut staging_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
                     attachment: &multisample_texture_view,
@@ -298,6 +306,8 @@ impl State {
             staging_render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
 
             staging_render_pass.draw_indexed(self.stroke_range.clone(), 0, 0..1);
+
+            self.blank = false;
         }
 
         let bind_group = create_bind_group(
@@ -310,33 +320,54 @@ impl State {
             .device
             .create_buffer_with_data(bytemuck::cast_slice(&VERTICES), wgpu::BufferUsage::VERTEX);
 
-        {
-            let mut blur_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
-                    attachment: multisample_texture_view,
-                    resolve_target: Some(&frame.output.view),
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.05,
-                            g: 0.01,
-                            b: 0.02,
-                            a: 1.0,
-                        }),
-                        store: true,
-                    },
-                }],
-                depth_stencil_attachment: None,
-            });
+        if self.frame % 40 == 0 {
+            {
+                let mut blur_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                    color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
+                        attachment: multisample_texture_view,
+                        resolve_target: Some(&frame.output.view),
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: 0.05,
+                                g: 0.01,
+                                b: 0.02,
+                                a: 1.0,
+                            }),
+                            store: true,
+                        },
+                    }],
+                    depth_stencil_attachment: None,
+                });
 
-            blur_render_pass.set_pipeline(&self.blur_render_pipeline);
-            blur_render_pass.set_bind_group(0, &bind_group, &[]);
-            // blur_render_pass.set_index_buffer(index_buffer.slice(..));
-            blur_render_pass.set_vertex_buffer(0, vertex_square.slice(..));
+                blur_render_pass.set_pipeline(&self.blur_render_pipeline);
+                blur_render_pass.set_bind_group(0, &bind_group, &[]);
+                // blur_render_pass.set_index_buffer(index_buffer.slice(..));
+                blur_render_pass.set_vertex_buffer(0, vertex_square.slice(..));
 
-            blur_render_pass.draw(0..VERTICES.len() as u32, 0..1);
+                blur_render_pass.draw(0..VERTICES.len() as u32, 0..1);
+            }
+
+            encoder.copy_texture_to_texture(
+                wgpu::TextureCopyView {
+                    texture: &self.multisample_texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                },
+                wgpu::TextureCopyView {
+                    texture: &self.staging_texture,
+                    mip_level: 0,
+                    origin: wgpu::Origin3d::ZERO,
+                },
+                wgpu::Extent3d {
+                    width: self.sc_desc.width,
+                    height: self.sc_desc.height,
+                    depth: 1,
+                },
+            );
         }
 
         self.queue.submit(Some(encoder.finish()));
+        self.frame += 1;
     }
 }
 
@@ -344,6 +375,7 @@ fn create_framebuffer(
     device: &wgpu::Device,
     sc_desc: &wgpu::SwapChainDescriptor,
     sample_count: u32,
+    src: bool,
 ) -> wgpu::Texture {
     let texture_extent = wgpu::Extent3d {
         width: sc_desc.width,
@@ -356,7 +388,13 @@ fn create_framebuffer(
         sample_count: sample_count,
         dimension: wgpu::TextureDimension::D2,
         format: sc_desc.format,
-        usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT | wgpu::TextureUsage::SAMPLED,
+        usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT
+            | wgpu::TextureUsage::SAMPLED
+            | if src {
+                wgpu::TextureUsage::COPY_SRC
+            } else {
+                wgpu::TextureUsage::COPY_DST
+            },
         label: None,
     };
 
