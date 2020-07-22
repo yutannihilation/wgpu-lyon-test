@@ -8,7 +8,7 @@ layout(set = 0, binding = 1) uniform sampler s_staging;
 
 vec2 off1 = vec2(1.3846153846);
 vec2 off2 = vec2(3.2307692308);
-vec2 resolution = vec2(300);
+vec2 resolution = vec2(130);
 
 void main() {
     // f_color = texture(sampler2D(t_staging, s_staging), v_tex_coords);
