@@ -52,6 +52,25 @@ const VERTICES: &[BlurVertex] = &[
     BlurVertex { position: [-1.0,  1.0], },
 ];
 
+#[repr(C)] // We need this for Rust to store our data correctly for the shaders
+#[derive(Debug, Copy, Clone)] // This is so we can store this in a buffer
+struct Uniforms {
+    horizontal: bool,
+}
+
+impl Uniforms {
+    fn new() -> Self {
+        Self { horizontal: true }
+    }
+
+    fn flip(&mut self) {
+        self.horizontal = !self.horizontal;
+    }
+}
+
+unsafe impl bytemuck::Pod for Uniforms {}
+unsafe impl bytemuck::Zeroable for Uniforms {}
+
 // State is derived from sotrh/learn-wgpu
 struct State {
     surface: wgpu::Surface,
@@ -60,11 +79,9 @@ struct State {
     sc_desc: wgpu::SwapChainDescriptor,
     swap_chain: wgpu::SwapChain,
 
-    // vertex_buffer: wgpu::Buffer,
-    // index_buffer: wgpu::Buffer,
-    // index_count: usize,
-    // bind_group: wgpu::BindGroup,
     blur_bind_group_layout: wgpu::BindGroupLayout,
+    blur_uniform_bind_group_layout: wgpu::BindGroupLayout,
+    blur_uniform: Uniforms,
     staging_render_pipeline: wgpu::RenderPipeline,
     blur_render_pipeline: wgpu::RenderPipeline,
     staging_texture: wgpu::Texture,
@@ -169,6 +186,19 @@ impl State {
                 label: None,
             });
 
+        let blur_uniform_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                entries: Borrowed(&[wgpu::BindGroupLayoutEntry::new(
+                    0,
+                    wgpu::ShaderStage::FRAGMENT,
+                    wgpu::BindingType::UniformBuffer {
+                        dynamic: false,
+                        min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<bool>() as _),
+                    },
+                )]),
+                label: None,
+            });
+
         // For staging buffer, we don't use bindgroups
         let staging_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
@@ -178,9 +208,14 @@ impl State {
 
         // For blur, we do use bind_group_layout
         let blur_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            bind_group_layouts: Borrowed(&[&blur_bind_group_layout]),
+            bind_group_layouts: Borrowed(&[
+                &blur_bind_group_layout,
+                &blur_uniform_bind_group_layout,
+            ]),
             push_constant_ranges: Borrowed(&[]),
         });
+
+        let mut blur_uniform = Uniforms::new();
 
         let staging_texture = create_framebuffer(&device, &sc_desc, 1, false);
         let multisample_texture = create_framebuffer(&device, &sc_desc, SAMPLE_COUNT, true);
@@ -229,11 +264,9 @@ impl State {
             sc_desc,
             swap_chain,
 
-            // vertex_buffer,
-            // index_buffer,
-            // index_count,
-            // bind_group,
             blur_bind_group_layout,
+            blur_uniform_bind_group_layout,
+            blur_uniform,
             staging_render_pipeline,
             staging_texture,
             multisample_texture,
@@ -335,6 +368,23 @@ impl State {
             &self.staging_texture,
         );
 
+        let blur_uniform_buffer =
+            self.device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: None,
+                    contents: bytemuck::cast_slice(&[self.blur_uniform]),
+                    usage: wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
+                });
+
+        let blur_uniform_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &self.blur_uniform_bind_group_layout,
+            entries: Borrowed(&[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(blur_uniform_buffer.slice(..)),
+            }]),
+            label: None,
+        });
+
         let vertex_square = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -343,7 +393,7 @@ impl State {
                 usage: wgpu::BufferUsage::VERTEX,
             });
 
-        if self.frame % 40 == 0 {
+        if true {
             {
                 let mut blur_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     color_attachments: Borrowed(&[wgpu::RenderPassColorAttachmentDescriptor {
@@ -364,6 +414,7 @@ impl State {
 
                 blur_render_pass.set_pipeline(&self.blur_render_pipeline);
                 blur_render_pass.set_bind_group(0, &bind_group, &[]);
+                blur_render_pass.set_bind_group(1, &blur_uniform_bind_group, &[]);
                 // blur_render_pass.set_index_buffer(index_buffer.slice(..));
                 blur_render_pass.set_vertex_buffer(0, vertex_square.slice(..));
 
