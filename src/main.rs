@@ -368,23 +368,6 @@ impl State {
             &self.staging_texture,
         );
 
-        let blur_uniform_buffer =
-            self.device
-                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
-                    label: None,
-                    contents: bytemuck::cast_slice(&[self.blur_uniform]),
-                    usage: wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
-                });
-
-        let blur_uniform_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
-            layout: &self.blur_uniform_bind_group_layout,
-            entries: Borrowed(&[wgpu::BindGroupEntry {
-                binding: 0,
-                resource: wgpu::BindingResource::Buffer(blur_uniform_buffer.slice(..)),
-            }]),
-            label: None,
-        });
-
         let vertex_square = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -394,6 +377,25 @@ impl State {
             });
 
         if true {
+            let blur_uniform_buffer =
+                self.device
+                    .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                        label: None,
+                        contents: bytemuck::cast_slice(&[self.blur_uniform]),
+                        usage: wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
+                    });
+
+            let blur_uniform_bind_group =
+                self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+                    layout: &self.blur_uniform_bind_group_layout,
+                    entries: Borrowed(&[wgpu::BindGroupEntry {
+                        binding: 0,
+                        resource: wgpu::BindingResource::Buffer(blur_uniform_buffer.slice(..)),
+                    }]),
+                    label: None,
+                });
+            self.blur_uniform.flip();
+
             {
                 let mut blur_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     color_attachments: Borrowed(&[wgpu::RenderPassColorAttachmentDescriptor {
