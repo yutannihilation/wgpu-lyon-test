@@ -14,6 +14,9 @@ use winit::{
 
 use futures::executor::block_on;
 
+use std::borrow::Cow::Borrowed;
+use wgpu::util::DeviceExt;
+
 const SAMPLE_COUNT: u32 = 4;
 
 const IMAGE_DIR: &str = "img";
@@ -147,7 +150,7 @@ impl State {
 
         let blur_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
-                entries: &[
+                entries: Borrowed(&[
                     wgpu::BindGroupLayoutEntry::new(
                         0,
                         wgpu::ShaderStage::FRAGMENT,
@@ -162,21 +165,21 @@ impl State {
                         wgpu::ShaderStage::FRAGMENT,
                         wgpu::BindingType::Sampler { comparison: false },
                     ),
-                ],
-                label: Some("staging"),
+                ]),
+                label: None,
             });
 
         // For staging buffer, we don't use bindgroups
         let staging_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                bind_group_layouts: &[],
-                push_constant_ranges: &[],
+                bind_group_layouts: Borrowed(&[]),
+                push_constant_ranges: Borrowed(&[]),
             });
 
         // For blur, we do use bind_group_layout
         let blur_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            bind_group_layouts: &[&blur_bind_group_layout],
-            push_constant_ranges: &[],
+            bind_group_layouts: Borrowed(&[&blur_bind_group_layout]),
+            push_constant_ranges: Borrowed(&[]),
         });
 
         let staging_texture = create_framebuffer(&device, &sc_desc, 1, false);
@@ -265,38 +268,42 @@ impl State {
     fn update(&mut self) {}
 
     fn render(&mut self) {
-        let frame = match self.swap_chain.get_next_frame() {
+        let frame = match self.swap_chain.get_current_frame() {
             Ok(frame) => frame,
             Err(_) => {
                 self.swap_chain = self.device.create_swap_chain(&self.surface, &self.sc_desc);
                 self.swap_chain
-                    .get_next_frame()
+                    .get_current_frame()
                     .expect("Failed to acquire next swap chain texture!")
             }
         };
 
         let mut encoder = self
             .device
-            .create_command_encoder(&wgpu::CommandEncoderDescriptor {
-                label: Some("Render Encoder"),
+            .create_command_encoder(&wgpu::CommandEncoderDescriptor { label: None });
+
+        let vertex_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: bytemuck::cast_slice(&self.geometry.vertices),
+                usage: wgpu::BufferUsage::VERTEX,
             });
 
-        let vertex_buffer = self.device.create_buffer_with_data(
-            bytemuck::cast_slice(&self.geometry.vertices),
-            wgpu::BufferUsage::VERTEX,
-        );
-
-        let index_buffer = self.device.create_buffer_with_data(
-            bytemuck::cast_slice(&self.geometry.indices),
-            wgpu::BufferUsage::INDEX,
-        );
+        let index_buffer = self
+            .device
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: bytemuck::cast_slice(&self.geometry.indices),
+                usage: wgpu::BufferUsage::INDEX,
+            });
 
         let staging_texture_view = self.staging_texture.create_default_view();
         let multisample_texture_view = &self.multisample_texture.create_default_view();
         // draw staging buffer
         if self.blank {
             let mut staging_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
+                color_attachments: Borrowed(&[wgpu::RenderPassColorAttachmentDescriptor {
                     attachment: &multisample_texture_view,
                     // attachment: &frame.output.view,
                     resolve_target: Some(&staging_texture_view),
@@ -309,7 +316,7 @@ impl State {
                         }),
                         store: true,
                     },
-                }],
+                }]),
                 depth_stencil_attachment: None,
             });
 
@@ -330,12 +337,16 @@ impl State {
 
         let vertex_square = self
             .device
-            .create_buffer_with_data(bytemuck::cast_slice(&VERTICES), wgpu::BufferUsage::VERTEX);
+            .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                label: None,
+                contents: bytemuck::cast_slice(&VERTICES),
+                usage: wgpu::BufferUsage::VERTEX,
+            });
 
         if self.frame % 40 == 0 {
             {
                 let mut blur_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                    color_attachments: &[wgpu::RenderPassColorAttachmentDescriptor {
+                    color_attachments: Borrowed(&[wgpu::RenderPassColorAttachmentDescriptor {
                         attachment: multisample_texture_view,
                         resolve_target: Some(&frame.output.view),
                         ops: wgpu::Operations {
@@ -347,7 +358,7 @@ impl State {
                             }),
                             store: true,
                         },
-                    }],
+                    }]),
                     depth_stencil_attachment: None,
                 });
 
@@ -430,7 +441,7 @@ fn create_bind_group(
 
     device.create_bind_group(&wgpu::BindGroupDescriptor {
         layout: bind_group_layout,
-        entries: &[
+        entries: Borrowed(&[
             wgpu::BindGroupEntry {
                 binding: 0,
                 resource: wgpu::BindingResource::TextureView(&staging_texture_view),
@@ -439,8 +450,8 @@ fn create_bind_group(
                 binding: 1,
                 resource: wgpu::BindingResource::Sampler(&sampler),
             },
-        ],
-        label: Some("staging"),
+        ]),
+        label: None,
     })
 }
 
@@ -458,34 +469,32 @@ fn create_render_pipeline(
         layout: pipeline_layout,
         vertex_stage: wgpu::ProgrammableStageDescriptor {
             module: &vs_mod,
-            entry_point: "main",
+            entry_point: Borrowed("main"),
         },
         fragment_stage: Some(wgpu::ProgrammableStageDescriptor {
             module: &fs_mod,
-            entry_point: "main",
+            entry_point: Borrowed("main"),
         }),
         rasterization_state: Some(wgpu::RasterizationStateDescriptor {
             front_face: wgpu::FrontFace::Ccw,
             cull_mode: wgpu::CullMode::None,
-            depth_bias: 0,
-            depth_bias_slope_scale: 0.0,
-            depth_bias_clamp: 0.0,
+            ..Default::default()
         }),
         primitive_topology: wgpu::PrimitiveTopology::TriangleList,
-        color_states: &[wgpu::ColorStateDescriptor {
+        color_states: Borrowed(&[wgpu::ColorStateDescriptor {
             format: sc_desc.format,
             color_blend: wgpu::BlendDescriptor::REPLACE,
             alpha_blend: wgpu::BlendDescriptor::REPLACE,
             write_mask: wgpu::ColorWrite::ALL,
-        }],
+        }]),
         depth_stencil_state: None,
         vertex_state: wgpu::VertexStateDescriptor {
             index_format: wgpu::IndexFormat::Uint16,
-            vertex_buffers: &[wgpu::VertexBufferDescriptor {
+            vertex_buffers: Borrowed(&[wgpu::VertexBufferDescriptor {
                 stride: std::mem::size_of::<Vertex>() as wgpu::BufferAddress,
                 step_mode: wgpu::InputStepMode::Vertex,
-                attributes: attr_array,
-            }],
+                attributes: Borrowed(attr_array),
+            }]),
         },
         sample_count: sample_count,
         sample_mask: !0,
