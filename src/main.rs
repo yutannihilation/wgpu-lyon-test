@@ -95,7 +95,6 @@ struct State {
 
     multisample_texture: wgpu::Texture,
     geometry: VertexBuffers<Vertex, u16>,
-    stroke_range: std::ops::Range<u32>,
 
     size: winit::dpi::PhysicalSize<u32>,
 
@@ -253,16 +252,6 @@ impl State {
             SAMPLE_COUNT,
         );
 
-        // extend the index data to the alined size
-        let stroke_range = 0..(geometry.indices.len() as u32);
-        let alignment = wgpu::COPY_BUFFER_ALIGNMENT as usize / std::mem::size_of::<u16>();
-        let fraction = geometry.indices.len() % alignment;
-        if fraction > 0 {
-            geometry
-                .indices
-                .extend(std::iter::repeat(0).take(alignment - fraction));
-        }
-
         let mut output_dir = std::path::PathBuf::new();
         output_dir.push(IMAGE_DIR);
         if !output_dir.is_dir() {
@@ -287,7 +276,6 @@ impl State {
 
             multisample_texture,
             geometry,
-            stroke_range,
             size,
 
             output_dir,
@@ -368,16 +356,16 @@ impl State {
                             store: true,
                         },
                     },
-                    wgpu::RenderPassColorAttachmentDescriptor {
-                        attachment: &staging_texture_view,
-                        resolve_target: None,
-                        // attachment: multisample_texture_view,
-                        // resolve_target: Some(&staging_texture_view),
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                            store: true,
-                        },
-                    },
+                    // wgpu::RenderPassColorAttachmentDescriptor {
+                    //     attachment: &staging_texture_view,
+                    //     resolve_target: None,
+                    //     // attachment: multisample_texture_view,
+                    //     // resolve_target: Some(&staging_texture_view),
+                    //     ops: wgpu::Operations {
+                    //         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    //         store: true,
+                    //     },
+                    // },
                 ]),
                 depth_stencil_attachment: None,
             });
@@ -386,7 +374,7 @@ impl State {
             extract_render_pass.set_index_buffer(index_buffer.slice(..));
             extract_render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
 
-            extract_render_pass.draw_indexed(self.stroke_range.clone(), 0, 0..1);
+            extract_render_pass.draw_indexed(0..(self.geometry.indices.len() as u32), 0, 0..1);
         }
 
         // Apply blur multiple times
