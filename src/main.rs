@@ -56,11 +56,11 @@ const VERTICES: &[BlurVertex] = &[
 
 #[repr(C)] // We need this for Rust to store our data correctly for the shaders
 #[derive(Debug, Copy, Clone)] // This is so we can store this in a buffer
-struct Uniforms {
+struct BlurUniforms {
     horizontal: bool,
 }
 
-impl Uniforms {
+impl BlurUniforms {
     fn new() -> Self {
         Self { horizontal: true }
     }
@@ -70,8 +70,8 @@ impl Uniforms {
     }
 }
 
-unsafe impl bytemuck::Pod for Uniforms {}
-unsafe impl bytemuck::Zeroable for Uniforms {}
+unsafe impl bytemuck::Pod for BlurUniforms {}
+unsafe impl bytemuck::Zeroable for BlurUniforms {}
 
 // State is derived from sotrh/learn-wgpu
 struct State {
@@ -81,12 +81,18 @@ struct State {
     sc_desc: wgpu::SwapChainDescriptor,
     swap_chain: wgpu::SwapChain,
 
+    // A render pipeline to draw both the usual texture and bright-part-only texture.
+    extract_render_pipeline: wgpu::RenderPipeline,
+    staging_texture: wgpu::Texture,
+
+    // A render pipeline to apply gaussian blur. To use gaussian blur, we need two
+    // textures so that one can be rendered to another and vice versa.
     blur_bind_group_layout: wgpu::BindGroupLayout,
     blur_uniform_bind_group_layout: wgpu::BindGroupLayout,
-    blur_uniform: Uniforms,
-    staging_render_pipeline: wgpu::RenderPipeline,
+    blur_uniform: BlurUniforms,
     blur_render_pipeline: wgpu::RenderPipeline,
-    staging_texture: [wgpu::Texture; 2],
+    blur_textures: [wgpu::Texture; 2],
+
     multisample_texture: wgpu::Texture,
     geometry: VertexBuffers<Vertex, u16>,
     stroke_range: std::ops::Range<u32>,
@@ -202,33 +208,36 @@ impl State {
             });
 
         // For staging buffer, we don't use bindgroups
-        let staging_pipeline_layout =
+        let extract_render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 bind_group_layouts: Borrowed(&[]),
                 push_constant_ranges: Borrowed(&[]),
             });
 
         // For blur, we do use bind_group_layout
-        let blur_pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-            bind_group_layouts: Borrowed(&[
-                &blur_bind_group_layout,
-                &blur_uniform_bind_group_layout,
-            ]),
-            push_constant_ranges: Borrowed(&[]),
-        });
+        let blur_render_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                bind_group_layouts: Borrowed(&[
+                    &blur_bind_group_layout,
+                    &blur_uniform_bind_group_layout,
+                ]),
+                push_constant_ranges: Borrowed(&[]),
+            });
 
-        let mut blur_uniform = Uniforms::new();
+        let blur_uniform = BlurUniforms::new();
 
-        let staging_texture = [
+        let blur_textures = [
             create_framebuffer(&device, &sc_desc, 1, false),
             create_framebuffer(&device, &sc_desc, 1, false),
         ];
-        let multisample_texture = create_framebuffer(&device, &sc_desc, SAMPLE_COUNT, true);
-        // let bind_group = create_bind_group(&device, &blur_bind_group_layout, &staging_texture);
 
-        let staging_render_pipeline = create_render_pipeline(
+        let staging_texture = create_framebuffer(&device, &sc_desc, 1, false);
+
+        let multisample_texture = create_framebuffer(&device, &sc_desc, SAMPLE_COUNT, true);
+
+        let extract_render_pipeline = create_render_pipeline(
             &device,
-            &staging_pipeline_layout,
+            &extract_render_pipeline_layout,
             &sc_desc,
             &device.create_shader_module(wgpu::include_spirv!("shaders/shader.vert.spv")),
             &device.create_shader_module(wgpu::include_spirv!("shaders/shader.frag.spv")),
@@ -238,7 +247,7 @@ impl State {
 
         let blur_render_pipeline = create_render_pipeline(
             &device,
-            &blur_pipeline_layout,
+            &blur_render_pipeline_layout,
             &sc_desc,
             &device.create_shader_module(wgpu::include_spirv!("shaders/blur.vert.spv")),
             &device.create_shader_module(wgpu::include_spirv!("shaders/blur.frag.spv")),
@@ -269,13 +278,16 @@ impl State {
             sc_desc,
             swap_chain,
 
+            extract_render_pipeline,
+            staging_texture,
+
+            blur_render_pipeline,
             blur_bind_group_layout,
             blur_uniform_bind_group_layout,
             blur_uniform,
-            staging_render_pipeline,
-            staging_texture,
+            blur_textures,
+
             multisample_texture,
-            blur_render_pipeline,
             geometry,
             stroke_range,
             size,
@@ -293,7 +305,7 @@ impl State {
         self.sc_desc.height = new_size.height;
         self.swap_chain = self.device.create_swap_chain(&self.surface, &self.sc_desc);
 
-        self.staging_texture = [
+        self.blur_textures = [
             create_framebuffer(&self.device, &self.sc_desc, 1, false),
             create_framebuffer(&self.device, &self.sc_desc, 1, false),
         ];
@@ -339,32 +351,50 @@ impl State {
                 usage: wgpu::BufferUsage::INDEX,
             });
 
-        let staging_texture_view = [
-            self.staging_texture[0].create_default_view(),
-            self.staging_texture[1].create_default_view(),
+        let blur_texture_views = [
+            self.blur_textures[0].create_default_view(),
+            self.blur_textures[1].create_default_view(),
         ];
+
+        let staging_texture_view = &self.staging_texture.create_default_view();
+
         let multisample_texture_view = &self.multisample_texture.create_default_view();
+
         // draw into staging buffer
         {
             let mut staging_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
-                color_attachments: Borrowed(&[wgpu::RenderPassColorAttachmentDescriptor {
-                    attachment: &multisample_texture_view,
-                    // attachment: &frame.output.view,
-                    resolve_target: Some(&staging_texture_view[0]),
-                    ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: 0.23,
-                            g: 0.23,
-                            b: 0.23,
-                            a: 0.5,
-                        }),
-                        store: true,
+                color_attachments: Borrowed(&[
+                    wgpu::RenderPassColorAttachmentDescriptor {
+                        attachment: multisample_texture_view,
+                        resolve_target: Some(&blur_texture_views[0]),
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: 0.0,
+                                g: 0.0,
+                                b: 0.0,
+                                a: 0.0,
+                            }),
+                            store: true,
+                        },
                     },
-                }]),
+                    wgpu::RenderPassColorAttachmentDescriptor {
+                        attachment: multisample_texture_view,
+                        resolve_target: Some(&staging_texture_view),
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color {
+                                r: 0.0,
+                                g: 0.0,
+                                b: 0.0,
+                                a: 0.0,
+                            }),
+                            store: true,
+                        },
+                    },
+                ]),
                 depth_stencil_attachment: None,
             });
 
-            staging_render_pass.set_pipeline(&self.staging_render_pipeline);
+            staging_render_pass.set_pipeline(&self.extract_render_pipeline);
             staging_render_pass.set_index_buffer(index_buffer.slice(..));
             staging_render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
 
@@ -373,6 +403,7 @@ impl State {
             self.blank = false;
         }
 
+        // Apply blur multiple times
         let vertex_square = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -385,7 +416,7 @@ impl State {
             let bind_group = create_bind_group(
                 &self.device,
                 &self.blur_bind_group_layout,
-                &self.staging_texture[i % 2],
+                &self.blur_textures[i % 2],
             );
 
             let blur_uniform_buffer =
@@ -407,7 +438,7 @@ impl State {
                 });
             self.blur_uniform.flip();
 
-            let mut resolve_target = &self.staging_texture[(i + 1) % 2].create_default_view();
+            let mut resolve_target = &self.blur_textures[(i + 1) % 2].create_default_view();
             if i == BLUR_COUNT {
                 resolve_target = &frame.output.view;
             }
