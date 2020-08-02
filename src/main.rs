@@ -17,7 +17,7 @@ use futures::executor::block_on;
 use std::borrow::Cow::Borrowed;
 use wgpu::util::DeviceExt;
 
-const SAMPLE_COUNT: u32 = 4;
+const SAMPLE_COUNT: u32 = 1;
 
 const IMAGE_DIR: &str = "img";
 
@@ -180,7 +180,7 @@ impl State {
                         0,
                         wgpu::ShaderStage::FRAGMENT,
                         wgpu::BindingType::SampledTexture {
-                            multisampled: true,
+                            multisampled: SAMPLE_COUNT > 1,
                             dimension: wgpu::TextureViewDimension::D2,
                             component_type: wgpu::TextureComponentType::Float,
                         },
@@ -356,40 +356,34 @@ impl State {
             self.blur_textures[1].create_default_view(),
         ];
 
-        let staging_texture_view = &self.staging_texture.create_default_view();
+        let staging_texture_view = self.staging_texture.create_default_view();
 
-        let multisample_texture_view = &self.multisample_texture.create_default_view();
+        // let multisample_texture_view = &self.multisample_texture.create_default_view();
 
         // draw into staging buffer
         {
             let mut staging_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 color_attachments: Borrowed(&[
                     wgpu::RenderPassColorAttachmentDescriptor {
-                        attachment: multisample_texture_view,
-                        resolve_target: Some(&blur_texture_views[0]),
+                        attachment: &blur_texture_views[0],
+                        resolve_target: None,
+                        // attachment: multisample_texture_view,
+                        // resolve_target: Some(&blur_texture_views[0]),
                         ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color {
-                                r: 0.0,
-                                g: 0.0,
-                                b: 0.0,
-                                a: 0.0,
-                            }),
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                             store: true,
                         },
                     },
-                    wgpu::RenderPassColorAttachmentDescriptor {
-                        attachment: multisample_texture_view,
-                        resolve_target: Some(&staging_texture_view),
-                        ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color {
-                                r: 0.0,
-                                g: 0.0,
-                                b: 0.0,
-                                a: 0.0,
-                            }),
-                            store: true,
-                        },
-                    },
+                    // wgpu::RenderPassColorAttachmentDescriptor {
+                    //     attachment: &staging_texture_view,
+                    //     resolve_target: None,
+                    //     // attachment: multisample_texture_view,
+                    //     // resolve_target: Some(&staging_texture_view),
+                    //     ops: wgpu::Operations {
+                    //         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                    //         store: true,
+                    //     },
+                    // },
                 ]),
                 depth_stencil_attachment: None,
             });
@@ -446,8 +440,10 @@ impl State {
             {
                 let mut blur_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     color_attachments: Borrowed(&[wgpu::RenderPassColorAttachmentDescriptor {
-                        attachment: multisample_texture_view,
-                        resolve_target: Some(resolve_target),
+                        attachment: resolve_target,
+                        resolve_target: None,
+                        // attachment: multisample_texture_view,
+                        // resolve_target: Some(resolve_target),
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color {
                                 r: 0.05,
@@ -500,13 +496,7 @@ fn create_framebuffer(
         sample_count: sample_count,
         dimension: wgpu::TextureDimension::D2,
         format: sc_desc.format,
-        usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT
-            | wgpu::TextureUsage::SAMPLED
-            | if src {
-                wgpu::TextureUsage::COPY_SRC
-            } else {
-                wgpu::TextureUsage::COPY_DST
-            },
+        usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT | wgpu::TextureUsage::SAMPLED,
         label: None,
     };
 
