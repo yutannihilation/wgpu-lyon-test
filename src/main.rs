@@ -99,8 +99,6 @@ struct State {
 
     size: winit::dpi::PhysicalSize<u32>,
 
-    blank: bool,
-    frame: u64,
     output_dir: std::path::PathBuf,
 }
 
@@ -227,13 +225,13 @@ impl State {
         let blur_uniform = BlurUniforms::new();
 
         let blur_textures = [
-            create_framebuffer(&device, &sc_desc, 1, false),
-            create_framebuffer(&device, &sc_desc, 1, false),
+            create_framebuffer(&device, &sc_desc, 1),
+            create_framebuffer(&device, &sc_desc, 1),
         ];
 
-        let staging_texture = create_framebuffer(&device, &sc_desc, 1, false);
+        let staging_texture = create_framebuffer(&device, &sc_desc, 1);
 
-        let multisample_texture = create_framebuffer(&device, &sc_desc, SAMPLE_COUNT, true);
+        let multisample_texture = create_framebuffer(&device, &sc_desc, SAMPLE_COUNT);
 
         let extract_render_pipeline = create_render_pipeline(
             &device,
@@ -292,8 +290,6 @@ impl State {
             stroke_range,
             size,
 
-            blank: true,
-            frame: 0,
             output_dir,
         }
     }
@@ -306,12 +302,10 @@ impl State {
         self.swap_chain = self.device.create_swap_chain(&self.surface, &self.sc_desc);
 
         self.blur_textures = [
-            create_framebuffer(&self.device, &self.sc_desc, 1, false),
-            create_framebuffer(&self.device, &self.sc_desc, 1, false),
+            create_framebuffer(&self.device, &self.sc_desc, 1),
+            create_framebuffer(&self.device, &self.sc_desc, 1),
         ];
-        self.multisample_texture =
-            create_framebuffer(&self.device, &self.sc_desc, SAMPLE_COUNT, true);
-        self.blank = true;
+        self.multisample_texture = create_framebuffer(&self.device, &self.sc_desc, SAMPLE_COUNT);
     }
 
     fn input(&mut self, _: &WindowEvent) -> bool {
@@ -362,7 +356,7 @@ impl State {
 
         // draw into staging buffer
         {
-            let mut staging_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+            let mut extract_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 color_attachments: Borrowed(&[
                     wgpu::RenderPassColorAttachmentDescriptor {
                         attachment: &blur_texture_views[0],
@@ -374,27 +368,25 @@ impl State {
                             store: true,
                         },
                     },
-                    // wgpu::RenderPassColorAttachmentDescriptor {
-                    //     attachment: &staging_texture_view,
-                    //     resolve_target: None,
-                    //     // attachment: multisample_texture_view,
-                    //     // resolve_target: Some(&staging_texture_view),
-                    //     ops: wgpu::Operations {
-                    //         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    //         store: true,
-                    //     },
-                    // },
+                    wgpu::RenderPassColorAttachmentDescriptor {
+                        attachment: &staging_texture_view,
+                        resolve_target: None,
+                        // attachment: multisample_texture_view,
+                        // resolve_target: Some(&staging_texture_view),
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: true,
+                        },
+                    },
                 ]),
                 depth_stencil_attachment: None,
             });
 
-            staging_render_pass.set_pipeline(&self.extract_render_pipeline);
-            staging_render_pass.set_index_buffer(index_buffer.slice(..));
-            staging_render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
+            extract_render_pass.set_pipeline(&self.extract_render_pipeline);
+            extract_render_pass.set_index_buffer(index_buffer.slice(..));
+            extract_render_pass.set_vertex_buffer(0, vertex_buffer.slice(..));
 
-            staging_render_pass.draw_indexed(self.stroke_range.clone(), 0, 0..1);
-
-            self.blank = false;
+            extract_render_pass.draw_indexed(self.stroke_range.clone(), 0, 0..1);
         }
 
         // Apply blur multiple times
@@ -474,8 +466,6 @@ impl State {
         //     let file = self.output_dir.clone();
         //     create_png(file.join(format!("{:03}.png", self.frame)), &self.device, &);
         // }
-
-        self.frame += 1;
     }
 }
 
@@ -483,7 +473,6 @@ fn create_framebuffer(
     device: &wgpu::Device,
     sc_desc: &wgpu::SwapChainDescriptor,
     sample_count: u32,
-    src: bool,
 ) -> wgpu::Texture {
     let texture_extent = wgpu::Extent3d {
         width: sc_desc.width,
