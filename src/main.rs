@@ -21,6 +21,8 @@ const SAMPLE_COUNT: u32 = 4;
 
 const IMAGE_DIR: &str = "img";
 
+const BLUR_COUNT: usize = 10;
+
 // The vertex type that we will use to represent a point on our triangle.
 #[repr(C)]
 #[derive(Clone, Copy)]
@@ -84,7 +86,7 @@ struct State {
     blur_uniform: Uniforms,
     staging_render_pipeline: wgpu::RenderPipeline,
     blur_render_pipeline: wgpu::RenderPipeline,
-    staging_texture: wgpu::Texture,
+    staging_texture: [wgpu::Texture; 2],
     multisample_texture: wgpu::Texture,
     geometry: VertexBuffers<Vertex, u16>,
     stroke_range: std::ops::Range<u32>,
@@ -217,7 +219,10 @@ impl State {
 
         let mut blur_uniform = Uniforms::new();
 
-        let staging_texture = create_framebuffer(&device, &sc_desc, 1, false);
+        let staging_texture = [
+            create_framebuffer(&device, &sc_desc, 1, false),
+            create_framebuffer(&device, &sc_desc, 1, false),
+        ];
         let multisample_texture = create_framebuffer(&device, &sc_desc, SAMPLE_COUNT, true);
         // let bind_group = create_bind_group(&device, &blur_bind_group_layout, &staging_texture);
 
@@ -288,7 +293,10 @@ impl State {
         self.sc_desc.height = new_size.height;
         self.swap_chain = self.device.create_swap_chain(&self.surface, &self.sc_desc);
 
-        self.staging_texture = create_framebuffer(&self.device, &self.sc_desc, 1, false);
+        self.staging_texture = [
+            create_framebuffer(&self.device, &self.sc_desc, 1, false),
+            create_framebuffer(&self.device, &self.sc_desc, 1, false),
+        ];
         self.multisample_texture =
             create_framebuffer(&self.device, &self.sc_desc, SAMPLE_COUNT, true);
         self.blank = true;
@@ -331,15 +339,18 @@ impl State {
                 usage: wgpu::BufferUsage::INDEX,
             });
 
-        let staging_texture_view = self.staging_texture.create_default_view();
+        let staging_texture_view = [
+            self.staging_texture[0].create_default_view(),
+            self.staging_texture[1].create_default_view(),
+        ];
         let multisample_texture_view = &self.multisample_texture.create_default_view();
-        // draw staging buffer
-        if self.blank {
+        // draw into staging buffer
+        {
             let mut staging_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 color_attachments: Borrowed(&[wgpu::RenderPassColorAttachmentDescriptor {
                     attachment: &multisample_texture_view,
                     // attachment: &frame.output.view,
-                    resolve_target: Some(&staging_texture_view),
+                    resolve_target: Some(&staging_texture_view[0]),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color {
                             r: 0.23,
@@ -362,12 +373,6 @@ impl State {
             self.blank = false;
         }
 
-        let bind_group = create_bind_group(
-            &self.device,
-            &self.blur_bind_group_layout,
-            &self.staging_texture,
-        );
-
         let vertex_square = self
             .device
             .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -376,7 +381,13 @@ impl State {
                 usage: wgpu::BufferUsage::VERTEX,
             });
 
-        if true {
+        for i in 0..=BLUR_COUNT {
+            let bind_group = create_bind_group(
+                &self.device,
+                &self.blur_bind_group_layout,
+                &self.staging_texture[i % 2],
+            );
+
             let blur_uniform_buffer =
                 self.device
                     .create_buffer_init(&wgpu::util::BufferInitDescriptor {
@@ -396,11 +407,16 @@ impl State {
                 });
             self.blur_uniform.flip();
 
+            let mut resolve_target = &self.staging_texture[(i + 1) % 2].create_default_view();
+            if i == BLUR_COUNT {
+                resolve_target = &frame.output.view;
+            }
+
             {
                 let mut blur_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     color_attachments: Borrowed(&[wgpu::RenderPassColorAttachmentDescriptor {
                         attachment: multisample_texture_view,
-                        resolve_target: Some(&frame.output.view),
+                        resolve_target: Some(resolve_target),
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color {
                                 r: 0.05,
@@ -422,24 +438,6 @@ impl State {
 
                 blur_render_pass.draw(0..VERTICES.len() as u32, 0..1);
             }
-
-            encoder.copy_texture_to_texture(
-                wgpu::TextureCopyView {
-                    texture: &self.multisample_texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                },
-                wgpu::TextureCopyView {
-                    texture: &self.staging_texture,
-                    mip_level: 0,
-                    origin: wgpu::Origin3d::ZERO,
-                },
-                wgpu::Extent3d {
-                    width: self.sc_desc.width,
-                    height: self.sc_desc.height,
-                    depth: 1,
-                },
-            );
         }
 
         self.queue.submit(Some(encoder.finish()));
