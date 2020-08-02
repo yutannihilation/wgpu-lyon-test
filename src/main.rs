@@ -240,6 +240,7 @@ impl State {
             &device.create_shader_module(wgpu::include_spirv!("shaders/shader.frag.spv")),
             &wgpu::vertex_attr_array![0 => Float2],
             SAMPLE_COUNT,
+            2,
         );
 
         let blur_render_pipeline = create_render_pipeline(
@@ -250,6 +251,7 @@ impl State {
             &device.create_shader_module(wgpu::include_spirv!("shaders/blur.frag.spv")),
             &wgpu::vertex_attr_array![0 => Float2, 1 => Float2],
             SAMPLE_COUNT,
+            1,
         );
 
         let mut output_dir = std::path::PathBuf::new();
@@ -293,6 +295,7 @@ impl State {
             create_framebuffer(&self.device, &self.sc_desc, 1),
             create_framebuffer(&self.device, &self.sc_desc, 1),
         ];
+        self.staging_texture = create_framebuffer(&self.device, &self.sc_desc, 1);
         self.multisample_texture = create_framebuffer(&self.device, &self.sc_desc, SAMPLE_COUNT);
     }
 
@@ -356,16 +359,16 @@ impl State {
                             store: true,
                         },
                     },
-                    // wgpu::RenderPassColorAttachmentDescriptor {
-                    //     attachment: &staging_texture_view,
-                    //     resolve_target: None,
-                    //     // attachment: multisample_texture_view,
-                    //     // resolve_target: Some(&staging_texture_view),
-                    //     ops: wgpu::Operations {
-                    //         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
-                    //         store: true,
-                    //     },
-                    // },
+                    wgpu::RenderPassColorAttachmentDescriptor {
+                        attachment: &staging_texture_view,
+                        resolve_target: None,
+                        // attachment: multisample_texture_view,
+                        // resolve_target: Some(&staging_texture_view),
+                        ops: wgpu::Operations {
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                            store: true,
+                        },
+                    },
                 ]),
                 depth_stencil_attachment: None,
             });
@@ -512,7 +515,17 @@ fn create_render_pipeline(
     fs_mod: &wgpu::ShaderModule,
     attr_array: &[wgpu::VertexAttributeDescriptor],
     sample_count: u32,
+    n_color_states: u32,
 ) -> wgpu::RenderPipeline {
+    let v: Vec<_> = (0..n_color_states)
+        .map(|_| wgpu::ColorStateDescriptor {
+            format: sc_desc.format,
+            color_blend: wgpu::BlendDescriptor::REPLACE,
+            alpha_blend: wgpu::BlendDescriptor::REPLACE,
+            write_mask: wgpu::ColorWrite::ALL,
+        })
+        .collect();
+
     // Load shader modules.
     device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
         layout: pipeline_layout,
@@ -530,12 +543,7 @@ fn create_render_pipeline(
             ..Default::default()
         }),
         primitive_topology: wgpu::PrimitiveTopology::TriangleList,
-        color_states: Borrowed(&[wgpu::ColorStateDescriptor {
-            format: sc_desc.format,
-            color_blend: wgpu::BlendDescriptor::REPLACE,
-            alpha_blend: wgpu::BlendDescriptor::REPLACE,
-            write_mask: wgpu::ColorWrite::ALL,
-        }]),
+        color_states: Borrowed(&v.as_slice()),
         depth_stencil_state: None,
         vertex_state: wgpu::VertexStateDescriptor {
             index_format: wgpu::IndexFormat::Uint16,
