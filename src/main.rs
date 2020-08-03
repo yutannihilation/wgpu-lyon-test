@@ -73,6 +73,21 @@ impl BlurUniforms {
 unsafe impl bytemuck::Pod for BlurUniforms {}
 unsafe impl bytemuck::Zeroable for BlurUniforms {}
 
+#[repr(C)] // We need this for Rust to store our data correctly for the shaders
+#[derive(Debug, Copy, Clone)] // This is so we can store this in a buffer
+struct BlendUniforms {
+    exposure: f32,
+}
+
+impl BlendUniforms {
+    fn new(exposure: f32) -> Self {
+        Self { exposure }
+    }
+}
+
+unsafe impl bytemuck::Pod for BlendUniforms {}
+unsafe impl bytemuck::Zeroable for BlendUniforms {}
+
 // State is derived from sotrh/learn-wgpu
 struct State {
     surface: wgpu::Surface,
@@ -92,6 +107,12 @@ struct State {
     blur_uniform: BlurUniforms,
     blur_render_pipeline: wgpu::RenderPipeline,
     blur_textures: [wgpu::Texture; 2],
+
+    // A render pipeline for blending the results
+    blend_bind_group_layout: wgpu::BindGroupLayout,
+    blend_uniform_bind_group_layout: wgpu::BindGroupLayout,
+    blend_uniform: BlendUniforms,
+    blend_render_pipeline: wgpu::RenderPipeline,
 
     multisample_texture: wgpu::Texture,
     geometry: VertexBuffers<Vertex, u16>,
@@ -228,6 +249,61 @@ impl State {
             create_framebuffer(&device, &sc_desc, 1),
         ];
 
+        let blend_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                entries: Borrowed(&[
+                    wgpu::BindGroupLayoutEntry::new(
+                        0,
+                        wgpu::ShaderStage::FRAGMENT,
+                        wgpu::BindingType::SampledTexture {
+                            multisampled: SAMPLE_COUNT > 1,
+                            dimension: wgpu::TextureViewDimension::D2,
+                            component_type: wgpu::TextureComponentType::Float,
+                        },
+                    ),
+                    wgpu::BindGroupLayoutEntry::new(
+                        1,
+                        wgpu::ShaderStage::FRAGMENT,
+                        wgpu::BindingType::SampledTexture {
+                            multisampled: SAMPLE_COUNT > 1,
+                            dimension: wgpu::TextureViewDimension::D2,
+                            component_type: wgpu::TextureComponentType::Float,
+                        },
+                    ),
+                    wgpu::BindGroupLayoutEntry::new(
+                        2,
+                        wgpu::ShaderStage::FRAGMENT,
+                        wgpu::BindingType::Sampler { comparison: false },
+                    ),
+                ]),
+                label: None,
+            });
+
+        let blend_uniform_bind_group_layout =
+            device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+                entries: Borrowed(&[wgpu::BindGroupLayoutEntry::new(
+                    0,
+                    wgpu::ShaderStage::FRAGMENT,
+                    wgpu::BindingType::UniformBuffer {
+                        dynamic: false,
+                        min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<f32>() as _),
+                    },
+                )]),
+                label: None,
+            });
+
+        // For blur, we do use bind_group_layout
+        let blend_render_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                bind_group_layouts: Borrowed(&[
+                    &blend_bind_group_layout,
+                    &blend_uniform_bind_group_layout,
+                ]),
+                push_constant_ranges: Borrowed(&[]),
+            });
+
+        let blend_uniform = BlendUniforms::new(1.0);
+
         let staging_texture = create_framebuffer(&device, &sc_desc, 1);
 
         let multisample_texture = create_framebuffer(&device, &sc_desc, SAMPLE_COUNT);
@@ -254,6 +330,17 @@ impl State {
             1,
         );
 
+        let blend_render_pipeline = create_render_pipeline(
+            &device,
+            &blend_render_pipeline_layout,
+            &sc_desc,
+            &device.create_shader_module(wgpu::include_spirv!("shaders/shader.vert.spv")),
+            &device.create_shader_module(wgpu::include_spirv!("shaders/blend.frag.spv")),
+            &wgpu::vertex_attr_array![0 => Float2],
+            SAMPLE_COUNT,
+            1,
+        );
+
         let mut output_dir = std::path::PathBuf::new();
         output_dir.push(IMAGE_DIR);
         if !output_dir.is_dir() {
@@ -270,11 +357,16 @@ impl State {
             extract_render_pipeline,
             staging_texture,
 
-            blur_render_pipeline,
             blur_bind_group_layout,
             blur_uniform_bind_group_layout,
             blur_uniform,
+            blur_render_pipeline,
             blur_textures,
+
+            blend_bind_group_layout,
+            blend_uniform_bind_group_layout,
+            blend_uniform,
+            blend_render_pipeline,
 
             multisample_texture,
             geometry,
@@ -350,20 +442,20 @@ impl State {
             let mut extract_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 color_attachments: Borrowed(&[
                     wgpu::RenderPassColorAttachmentDescriptor {
-                        attachment: &blur_texture_views[0],
+                        attachment: &staging_texture_view,
                         resolve_target: None,
                         // attachment: multisample_texture_view,
-                        // resolve_target: Some(&blur_texture_views[0]),
+                        // resolve_target: Some(&staging_texture_view),
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                             store: true,
                         },
                     },
                     wgpu::RenderPassColorAttachmentDescriptor {
-                        attachment: &staging_texture_view,
+                        attachment: &blur_texture_views[0],
                         resolve_target: None,
                         // attachment: multisample_texture_view,
-                        // resolve_target: Some(&staging_texture_view),
+                        // resolve_target: Some(&blur_texture_views[0]),
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                             store: true,
@@ -389,7 +481,7 @@ impl State {
                 usage: wgpu::BufferUsage::VERTEX,
             });
 
-        for i in 0..=BLUR_COUNT {
+        for i in 0..BLUR_COUNT {
             let bind_group = create_bind_group(
                 &self.device,
                 &self.blur_bind_group_layout,
@@ -415,11 +507,7 @@ impl State {
                 });
             self.blur_uniform.flip();
 
-            let mut resolve_target = &self.blur_textures[(i + 1) % 2].create_default_view();
-            if i == BLUR_COUNT {
-                resolve_target = &frame.output.view;
-            }
-
+            let resolve_target = &self.blur_textures[(i + 1) % 2].create_default_view();
             {
                 let mut blur_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     color_attachments: Borrowed(&[wgpu::RenderPassColorAttachmentDescriptor {
@@ -428,12 +516,7 @@ impl State {
                         // attachment: multisample_texture_view,
                         // resolve_target: Some(resolve_target),
                         ops: wgpu::Operations {
-                            load: wgpu::LoadOp::Clear(wgpu::Color {
-                                r: 0.05,
-                                g: 0.01,
-                                b: 0.02,
-                                a: 1.0,
-                            }),
+                            load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                             store: true,
                         },
                     }]),
@@ -443,11 +526,75 @@ impl State {
                 blur_render_pass.set_pipeline(&self.blur_render_pipeline);
                 blur_render_pass.set_bind_group(0, &bind_group, &[]);
                 blur_render_pass.set_bind_group(1, &blur_uniform_bind_group, &[]);
-                // blur_render_pass.set_index_buffer(index_buffer.slice(..));
                 blur_render_pass.set_vertex_buffer(0, vertex_square.slice(..));
 
                 blur_render_pass.draw(0..VERTICES.len() as u32, 0..1);
             }
+        }
+
+        let sampler = &self
+            .device
+            .create_sampler(&wgpu::SamplerDescriptor::default());
+
+        let blend_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &self.blend_bind_group_layout,
+            entries: Borrowed(&[
+                wgpu::BindGroupEntry {
+                    binding: 0,
+                    resource: wgpu::BindingResource::TextureView(&staging_texture_view),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 1,
+                    resource: wgpu::BindingResource::TextureView(
+                        &self.blur_textures[BLUR_COUNT % 2].create_default_view(),
+                    ),
+                },
+                wgpu::BindGroupEntry {
+                    binding: 2,
+                    resource: wgpu::BindingResource::Sampler(&sampler),
+                },
+            ]),
+            label: None,
+        });
+
+        let blend_uniform_buffer =
+            self.device
+                .create_buffer_init(&wgpu::util::BufferInitDescriptor {
+                    label: None,
+                    contents: bytemuck::cast_slice(&[self.blend_uniform]),
+                    usage: wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
+                });
+
+        let blend_uniform_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
+            layout: &self.blend_uniform_bind_group_layout,
+            entries: Borrowed(&[wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::Buffer(blend_uniform_buffer.slice(..)),
+            }]),
+            label: None,
+        });
+
+        {
+            let mut blend_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
+                color_attachments: Borrowed(&[wgpu::RenderPassColorAttachmentDescriptor {
+                    attachment: &frame.output.view,
+                    resolve_target: None,
+                    // attachment: multisample_texture_view,
+                    // resolve_target: Some(resolve_target),
+                    ops: wgpu::Operations {
+                        load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
+                        store: true,
+                    },
+                }]),
+                depth_stencil_attachment: None,
+            });
+
+            blend_render_pass.set_pipeline(&self.blend_render_pipeline);
+            blend_render_pass.set_bind_group(0, &blend_bind_group, &[]);
+            blend_render_pass.set_bind_group(1, &blend_uniform_bind_group, &[]);
+            blend_render_pass.set_vertex_buffer(0, vertex_square.slice(..));
+
+            blend_render_pass.draw(0..VERTICES.len() as u32, 0..1);
         }
 
         self.queue.submit(Some(encoder.finish()));
