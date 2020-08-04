@@ -21,7 +21,7 @@ const SAMPLE_COUNT: u32 = 1;
 
 const IMAGE_DIR: &str = "img";
 
-const BLUR_COUNT: usize = 10;
+const BLUR_COUNT: usize = 20;
 
 // The vertex type that we will use to represent a point on our triangle.
 #[repr(C)]
@@ -302,7 +302,7 @@ impl State {
                 push_constant_ranges: Borrowed(&[]),
             });
 
-        let blend_uniform = BlendUniforms::new(1.0);
+        let blend_uniform = BlendUniforms::new(5.0);
 
         let staging_texture = create_framebuffer(&device, &sc_desc, 1);
 
@@ -334,7 +334,7 @@ impl State {
             &device,
             &blend_render_pipeline_layout,
             &sc_desc,
-            &device.create_shader_module(wgpu::include_spirv!("shaders/shader.vert.spv")),
+            &device.create_shader_module(wgpu::include_spirv!("shaders/blur.vert.spv")),
             &device.create_shader_module(wgpu::include_spirv!("shaders/blend.frag.spv")),
             &wgpu::vertex_attr_array![0 => Float2],
             SAMPLE_COUNT,
