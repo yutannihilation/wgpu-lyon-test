@@ -21,9 +21,9 @@ const SAMPLE_COUNT: u32 = 4;
 
 const IMAGE_DIR: &str = "img";
 
-const BLUR_COUNT: usize = 30;
+const BLUR_COUNT: usize = 50;
 
-const EXPOSURE: f32 = 2.0;
+const EXPOSURE: f32 = 3.0;
 
 // The vertex type that we will use to represent a point on our triangle.
 #[repr(C)]
@@ -111,6 +111,38 @@ impl BufferDimensions {
             padded_bytes_per_row,
         }
     }
+
+    fn create(
+        device: &wgpu::Device,
+        width: usize,
+        height: usize,
+    ) -> (Self, wgpu::Buffer, wgpu::Texture) {
+        let png_dimensions = BufferDimensions::new(width, height);
+        // The output buffer lets us retrieve the data as an array
+        let png_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+            label: None,
+            size: (png_dimensions.padded_bytes_per_row * png_dimensions.height) as u64,
+            usage: wgpu::BufferUsage::MAP_READ | wgpu::BufferUsage::COPY_DST,
+            mapped_at_creation: false,
+        });
+
+        // The render pipeline renders data into this texture
+        let png_texture = device.create_texture(&wgpu::TextureDescriptor {
+            size: wgpu::Extent3d {
+                width: png_dimensions.width as u32,
+                height: png_dimensions.height as u32,
+                depth: 1,
+            },
+            mip_level_count: 1,
+            sample_count: 1,
+            dimension: wgpu::TextureDimension::D2,
+            format: wgpu::TextureFormat::Rgba8UnormSrgb,
+            usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT | wgpu::TextureUsage::COPY_SRC,
+            label: None,
+        });
+
+        (png_dimensions, png_buffer, png_texture)
+    }
 }
 
 // State is derived from sotrh/learn-wgpu
@@ -139,6 +171,11 @@ struct State {
     blend_render_pipeline: wgpu::RenderPipeline,
 
     multisample_texture: wgpu::Texture,
+
+    png_texture: wgpu::Texture,
+    png_buffer: wgpu::Buffer,
+    png_dimensions: BufferDimensions,
+
     geometry: VertexBuffers<Vertex, u16>,
 
     size: winit::dpi::PhysicalSize<u32>,
@@ -371,6 +408,9 @@ impl State {
             std::fs::create_dir(output_dir.clone()).unwrap();
         }
 
+        let (png_dimensions, png_buffer, png_texture) =
+            BufferDimensions::create(&device, sc_desc.width as usize, sc_desc.height as usize);
+
         State {
             surface,
             device,
@@ -392,6 +432,11 @@ impl State {
             blend_render_pipeline,
 
             multisample_texture,
+
+            png_texture,
+            png_buffer,
+            png_dimensions,
+
             geometry,
             size,
 
@@ -414,6 +459,16 @@ impl State {
         ];
         self.staging_texture = create_framebuffer(&self.device, &self.sc_desc);
         self.multisample_texture = create_multisampled_framebuffer(&self.device, &self.sc_desc);
+
+        let (png_dimensions, png_buffer, png_texture) = BufferDimensions::create(
+            &self.device,
+            self.sc_desc.width as usize,
+            self.sc_desc.height as usize,
+        );
+
+        self.png_dimensions = png_dimensions;
+        self.png_buffer = png_buffer;
+        self.png_texture = png_texture;
     }
 
     fn input(&mut self, _: &WindowEvent) -> bool {
@@ -578,7 +633,7 @@ impl State {
             label: None,
         });
 
-        let blend_uniform = BlendUniforms::new(EXPOSURE * (self.frame as f32 / 100.0).sin());
+        let blend_uniform = BlendUniforms::new(EXPOSURE * (self.frame as f32 / 33.0).sin());
 
         let blend_uniform_buffer =
             self.device
@@ -597,38 +652,7 @@ impl State {
             label: None,
         });
 
-        // It is a webgpu requirement that BufferCopyView.layout.bytes_per_row % wgpu::COPY_BYTES_PER_ROW_ALIGNMENT == 0
-        // So we calculate padded_bytes_per_row by rounding unpadded_bytes_per_row
-        // up to the next multiple of wgpu::COPY_BYTES_PER_ROW_ALIGNMENT.
-        // https://en.wikipedia.org/wiki/Data_structure_alignment#Computing_padding
-        let buffer_dimensions =
-            BufferDimensions::new(self.sc_desc.width as usize, self.sc_desc.height as usize);
-        // The output buffer lets us retrieve the data as an array
-        let output_buffer = self.device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
-            size: (buffer_dimensions.padded_bytes_per_row * buffer_dimensions.height) as u64,
-            usage: wgpu::BufferUsage::MAP_READ | wgpu::BufferUsage::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        let texture_extent = wgpu::Extent3d {
-            width: buffer_dimensions.width as u32,
-            height: buffer_dimensions.height as u32,
-            depth: 1,
-        };
-
-        // The render pipeline renders data into this texture
-        let png_texture = self.device.create_texture(&wgpu::TextureDescriptor {
-            size: texture_extent,
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT | wgpu::TextureUsage::COPY_SRC,
-            label: None,
-        });
-
-        let png_texture_view = png_texture.create_default_view();
+        let png_texture_view = &self.png_texture.create_default_view();
 
         let multisample_texture_view = &self.multisample_texture.create_default_view();
 
@@ -663,22 +687,17 @@ impl State {
             blend_render_pass.draw(0..VERTICES.len() as u32, 0..1);
         }
 
-        if self.frame > 1000 {
-            return;
-        }
-        let file = self.output_dir.clone();
-
         encoder.copy_texture_to_buffer(
             wgpu::TextureCopyView {
-                texture: &png_texture,
+                texture: &self.png_texture,
                 mip_level: 0,
                 origin: wgpu::Origin3d::ZERO,
             },
             wgpu::BufferCopyView {
-                buffer: &output_buffer,
+                buffer: &self.png_buffer,
                 layout: wgpu::TextureDataLayout {
                     offset: 0,
-                    bytes_per_row: buffer_dimensions.padded_bytes_per_row as u32,
+                    bytes_per_row: self.png_dimensions.padded_bytes_per_row as u32,
                     rows_per_image: 0,
                 },
             },
@@ -691,15 +710,18 @@ impl State {
 
         self.queue.submit(Some(encoder.finish()));
 
-        block_on(create_png(
-            &file
-                .join(format!("{:03}.png", self.frame))
-                .to_str()
-                .unwrap(),
-            &self.device,
-            output_buffer,
-            &buffer_dimensions,
-        ))
+        if self.frame < 1000 {
+            let file = self.output_dir.clone();
+            block_on(create_png(
+                &file
+                    .join(format!("{:03}.png", self.frame))
+                    .to_str()
+                    .unwrap(),
+                &self.device,
+                &self.png_buffer,
+                &self.png_dimensions,
+            ))
+        }
     }
 }
 
@@ -828,7 +850,7 @@ fn create_render_pipeline(
 async fn create_png(
     png_output_path: &str,
     device: &wgpu::Device,
-    output_buffer: wgpu::Buffer,
+    output_buffer: &wgpu::Buffer,
     buffer_dimensions: &BufferDimensions,
 ) {
     // Note that we're not calling `.await` here.
@@ -850,6 +872,7 @@ async fn create_png(
         );
         png_encoder.set_depth(png::BitDepth::Eight);
         png_encoder.set_color(png::ColorType::RGBA);
+        png_encoder.set_compression(png::Compression::Fast);
         let mut png_writer = png_encoder
             .write_header()
             .unwrap()
