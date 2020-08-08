@@ -278,8 +278,8 @@ impl State {
         let blur_uniform = BlurUniforms::new();
 
         let blur_textures = [
-            create_framebuffer(&device, &sc_desc, wgpu::TextureFormat::Bgra8UnormSrgb),
-            create_framebuffer(&device, &sc_desc, wgpu::TextureFormat::Bgra8UnormSrgb),
+            create_framebuffer(&device, &sc_desc, wgpu::TextureFormat::Bgra8Unorm),
+            create_framebuffer(&device, &sc_desc, wgpu::TextureFormat::Bgra8Unorm),
         ];
 
         let blend_bind_group_layout =
@@ -341,7 +341,7 @@ impl State {
             create_multisampled_framebuffer(&device, &sc_desc, sc_desc.format);
 
         let multisample_blur_texture =
-            create_multisampled_framebuffer(&device, &sc_desc, wgpu::TextureFormat::Bgra8UnormSrgb);
+            create_multisampled_framebuffer(&device, &sc_desc, wgpu::TextureFormat::Bgra8Unorm);
 
         let multisample_png_texture =
             create_multisampled_framebuffer(&device, &sc_desc, wgpu::TextureFormat::Rgba8UnormSrgb);
@@ -353,7 +353,7 @@ impl State {
             &device.create_shader_module(wgpu::include_spirv!("shaders/shader.frag.spv")),
             &wgpu::vertex_attr_array![0 => Float2],
             SAMPLE_COUNT,
-            vec![sc_desc.format, wgpu::TextureFormat::Bgra8UnormSrgb],
+            vec![sc_desc.format, wgpu::TextureFormat::Bgra8Unorm],
         );
 
         let blur_render_pipeline = create_render_pipeline(
@@ -363,7 +363,7 @@ impl State {
             &device.create_shader_module(wgpu::include_spirv!("shaders/blur.frag.spv")),
             &wgpu::vertex_attr_array![0 => Float2, 1 => Float2],
             SAMPLE_COUNT,
-            vec![wgpu::TextureFormat::Bgra8UnormSrgb],
+            vec![wgpu::TextureFormat::Bgra8Unorm],
         );
 
         let blend_render_pipeline = create_render_pipeline(
@@ -430,16 +430,8 @@ impl State {
         self.swap_chain = self.device.create_swap_chain(&self.surface, &self.sc_desc);
 
         self.blur_textures = [
-            create_framebuffer(
-                &self.device,
-                &self.sc_desc,
-                wgpu::TextureFormat::Bgra8UnormSrgb,
-            ),
-            create_framebuffer(
-                &self.device,
-                &self.sc_desc,
-                wgpu::TextureFormat::Bgra8UnormSrgb,
-            ),
+            create_framebuffer(&self.device, &self.sc_desc, wgpu::TextureFormat::Bgra8Unorm),
+            create_framebuffer(&self.device, &self.sc_desc, wgpu::TextureFormat::Bgra8Unorm),
         ];
         self.staging_texture = create_framebuffer(&self.device, &self.sc_desc, self.sc_desc.format);
         self.multisample_texture =
@@ -447,7 +439,7 @@ impl State {
         self.multisample_blur_texture = create_multisampled_framebuffer(
             &self.device,
             &self.sc_desc,
-            wgpu::TextureFormat::Bgra8UnormSrgb,
+            wgpu::TextureFormat::Bgra8Unorm,
         );
         self.multisample_png_texture = create_multisampled_framebuffer(
             &self.device,
