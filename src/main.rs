@@ -111,38 +111,6 @@ impl BufferDimensions {
             padded_bytes_per_row,
         }
     }
-
-    fn create(
-        device: &wgpu::Device,
-        width: usize,
-        height: usize,
-    ) -> (Self, wgpu::Buffer, wgpu::Texture) {
-        let png_dimensions = BufferDimensions::new(width, height);
-        // The output buffer lets us retrieve the data as an array
-        let png_buffer = device.create_buffer(&wgpu::BufferDescriptor {
-            label: None,
-            size: (png_dimensions.padded_bytes_per_row * png_dimensions.height) as u64,
-            usage: wgpu::BufferUsage::MAP_READ | wgpu::BufferUsage::COPY_DST,
-            mapped_at_creation: false,
-        });
-
-        // The render pipeline renders data into this texture
-        let png_texture = device.create_texture(&wgpu::TextureDescriptor {
-            size: wgpu::Extent3d {
-                width: png_dimensions.width as u32,
-                height: png_dimensions.height as u32,
-                depth: 1,
-            },
-            mip_level_count: 1,
-            sample_count: 1,
-            dimension: wgpu::TextureDimension::D2,
-            format: wgpu::TextureFormat::Rgba8UnormSrgb,
-            usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT | wgpu::TextureUsage::COPY_SRC,
-            label: None,
-        });
-
-        (png_dimensions, png_buffer, png_texture)
-    }
 }
 
 // State is derived from sotrh/learn-wgpu
@@ -409,7 +377,7 @@ impl State {
         }
 
         let (png_dimensions, png_buffer, png_texture) =
-            BufferDimensions::create(&device, sc_desc.width as usize, sc_desc.height as usize);
+            create_png_texture_and_buffer(&device, sc_desc.width as usize, sc_desc.height as usize);
 
         State {
             surface,
@@ -460,7 +428,7 @@ impl State {
         self.staging_texture = create_framebuffer(&self.device, &self.sc_desc);
         self.multisample_texture = create_multisampled_framebuffer(&self.device, &self.sc_desc);
 
-        let (png_dimensions, png_buffer, png_texture) = BufferDimensions::create(
+        let (png_dimensions, png_buffer, png_texture) = create_png_texture_and_buffer(
             &self.device,
             self.sc_desc.width as usize,
             self.sc_desc.height as usize,
@@ -843,6 +811,38 @@ fn create_render_pipeline(
         sample_mask: !0,
         alpha_to_coverage_enabled: false,
     })
+}
+
+fn create_png_texture_and_buffer(
+    device: &wgpu::Device,
+    width: usize,
+    height: usize,
+) -> (BufferDimensions, wgpu::Buffer, wgpu::Texture) {
+    let png_dimensions = BufferDimensions::new(width, height);
+    // The output buffer lets us retrieve the data as an array
+    let png_buffer = device.create_buffer(&wgpu::BufferDescriptor {
+        label: None,
+        size: (png_dimensions.padded_bytes_per_row * png_dimensions.height) as u64,
+        usage: wgpu::BufferUsage::MAP_READ | wgpu::BufferUsage::COPY_DST,
+        mapped_at_creation: false,
+    });
+
+    // The render pipeline renders data into this texture
+    let png_texture = device.create_texture(&wgpu::TextureDescriptor {
+        size: wgpu::Extent3d {
+            width: png_dimensions.width as u32,
+            height: png_dimensions.height as u32,
+            depth: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        format: wgpu::TextureFormat::Rgba8UnormSrgb,
+        usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT | wgpu::TextureUsage::COPY_SRC,
+        label: None,
+    });
+
+    (png_dimensions, png_buffer, png_texture)
 }
 
 // The original code is https://github.com/gfx-rs/wgpu-rs/blob/8e4d0015862507027f3a6bd68056c64568d11366/examples/capture/main.rs#L122-L194
