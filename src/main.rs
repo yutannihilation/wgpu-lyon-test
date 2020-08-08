@@ -401,7 +401,7 @@ impl State {
         self.frame += 1;
     }
 
-    async fn render(&mut self) {
+    fn render(&mut self) {
         let frame = match self.swap_chain.get_current_frame() {
             Ok(frame) => frame,
             Err(_) => {
@@ -597,7 +597,7 @@ impl State {
             blend_render_pass.draw(0..VERTICES.len() as u32, 0..1);
         }
 
-        if self.frame > 100 {
+        if self.frame > 10 {
             return;
         }
         let file = self.output_dir.clone();
@@ -639,7 +639,7 @@ impl State {
 
         self.queue.submit(Some(encoder.finish()));
 
-        create_png(
+        block_on(create_png(
             &file
                 .join(format!("{:03}.png", self.frame))
                 .to_str()
@@ -648,8 +648,7 @@ impl State {
             output_buffer,
             self.sc_desc.width * SAMPLE_COUNT / 2,
             self.sc_desc.height * SAMPLE_COUNT / 2,
-        )
-        .await
+        ))
     }
 }
 
@@ -869,7 +868,7 @@ fn main() {
             }
             Event::RedrawRequested(_) => {
                 state.update();
-                block_on(state.render());
+                state.render();
             }
             Event::MainEventsCleared => {
                 // RedrawRequested will only trigger once, unless we manually
