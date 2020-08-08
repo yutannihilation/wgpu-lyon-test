@@ -18,7 +18,7 @@ cargo:
 	glslangValidator -V $< -o $@
 
 out.mp4: img/*.png
-	ffmpeg -y -r 30 -i img/%03d.png -vcodec libx264 -pix_fmt yuv420p -r 60 $@
+	ffmpeg -y -r 60 -i img/%03d.png -vcodec libx264 -pix_fmt yuv420p -r 60 $@
 
 clean:
 	rm -f $(spirv)

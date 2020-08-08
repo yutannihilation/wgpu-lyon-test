@@ -261,7 +261,7 @@ impl State {
                         0,
                         wgpu::ShaderStage::FRAGMENT,
                         wgpu::BindingType::SampledTexture {
-                            multisampled: false,
+                            multisampled: true,
                             dimension: wgpu::TextureViewDimension::D2,
                             component_type: wgpu::TextureComponentType::Float,
                         },
@@ -319,7 +319,7 @@ impl State {
                         0,
                         wgpu::ShaderStage::FRAGMENT,
                         wgpu::BindingType::SampledTexture {
-                            multisampled: false,
+                            multisampled: true,
                             dimension: wgpu::TextureViewDimension::D2,
                             component_type: wgpu::TextureComponentType::Float,
                         },
@@ -328,7 +328,7 @@ impl State {
                         1,
                         wgpu::ShaderStage::FRAGMENT,
                         wgpu::BindingType::SampledTexture {
-                            multisampled: false,
+                            multisampled: true,
                             dimension: wgpu::TextureViewDimension::D2,
                             component_type: wgpu::TextureComponentType::Float,
                         },
@@ -387,7 +387,7 @@ impl State {
             &device.create_shader_module(wgpu::include_spirv!("shaders/blur.vert.spv")),
             &device.create_shader_module(wgpu::include_spirv!("shaders/blur.frag.spv")),
             &wgpu::vertex_attr_array![0 => Float2, 1 => Float2],
-            1,
+            SAMPLE_COUNT,
             1,
         );
 
@@ -559,7 +559,7 @@ impl State {
             });
 
         let blur_count =
-            (BLUR_COUNT as f32 * (1.0 + 0.3 * (self.frame as f32 / 83.0).sin())) as usize;
+            (BLUR_COUNT as f32 * (1.0 + 0.6 * (self.frame as f32 / 43.0).sin())) as usize;
         for i in 0..blur_count {
             let bind_group = create_bind_group(
                 &self.device,
@@ -590,8 +590,8 @@ impl State {
             {
                 let mut blur_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     color_attachments: Borrowed(&[wgpu::RenderPassColorAttachmentDescriptor {
-                        attachment: &resolve_target,
-                        resolve_target: None,
+                        attachment: &multisample_texture_view,
+                        resolve_target: Some(&resolve_target),
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                             store: true,
