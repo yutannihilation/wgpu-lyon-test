@@ -17,7 +17,7 @@ use futures::executor::block_on;
 use std::borrow::Cow::Borrowed;
 use wgpu::util::DeviceExt;
 
-const SAMPLE_COUNT: u32 = 1;
+const SAMPLE_COUNT: u32 = 4;
 
 const IMAGE_DIR: &str = "img";
 
@@ -198,7 +198,7 @@ impl State {
                         0,
                         wgpu::ShaderStage::FRAGMENT,
                         wgpu::BindingType::SampledTexture {
-                            multisampled: SAMPLE_COUNT > 1,
+                            multisampled: false,
                             dimension: wgpu::TextureViewDimension::D2,
                             component_type: wgpu::TextureComponentType::Float,
                         },
@@ -256,7 +256,7 @@ impl State {
                         0,
                         wgpu::ShaderStage::FRAGMENT,
                         wgpu::BindingType::SampledTexture {
-                            multisampled: SAMPLE_COUNT > 1,
+                            multisampled: false,
                             dimension: wgpu::TextureViewDimension::D2,
                             component_type: wgpu::TextureComponentType::Float,
                         },
@@ -265,7 +265,7 @@ impl State {
                         1,
                         wgpu::ShaderStage::FRAGMENT,
                         wgpu::BindingType::SampledTexture {
-                            multisampled: SAMPLE_COUNT > 1,
+                            multisampled: false,
                             dimension: wgpu::TextureViewDimension::D2,
                             component_type: wgpu::TextureComponentType::Float,
                         },
@@ -315,7 +315,7 @@ impl State {
             &device.create_shader_module(wgpu::include_spirv!("shaders/shader.vert.spv")),
             &device.create_shader_module(wgpu::include_spirv!("shaders/shader.frag.spv")),
             &wgpu::vertex_attr_array![0 => Float2],
-            SAMPLE_COUNT,
+            1,
             2,
         );
 
@@ -326,7 +326,7 @@ impl State {
             &device.create_shader_module(wgpu::include_spirv!("shaders/blur.vert.spv")),
             &device.create_shader_module(wgpu::include_spirv!("shaders/blur.frag.spv")),
             &wgpu::vertex_attr_array![0 => Float2, 1 => Float2],
-            SAMPLE_COUNT,
+            1,
             1,
         );
 
@@ -435,8 +435,6 @@ impl State {
 
         let staging_texture_view = self.staging_texture.create_default_view();
 
-        // let multisample_texture_view = &self.multisample_texture.create_default_view();
-
         // draw into staging buffer
         {
             let mut extract_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
@@ -444,8 +442,6 @@ impl State {
                     wgpu::RenderPassColorAttachmentDescriptor {
                         attachment: &staging_texture_view,
                         resolve_target: None,
-                        // attachment: multisample_texture_view,
-                        // resolve_target: Some(&staging_texture_view),
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                             store: true,
@@ -454,8 +450,6 @@ impl State {
                     wgpu::RenderPassColorAttachmentDescriptor {
                         attachment: &blur_texture_views[0],
                         resolve_target: None,
-                        // attachment: multisample_texture_view,
-                        // resolve_target: Some(&blur_texture_views[0]),
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                             store: true,
@@ -513,8 +507,6 @@ impl State {
                     color_attachments: Borrowed(&[wgpu::RenderPassColorAttachmentDescriptor {
                         attachment: resolve_target,
                         resolve_target: None,
-                        // attachment: multisample_texture_view,
-                        // resolve_target: Some(resolve_target),
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                             store: true,
@@ -574,13 +566,13 @@ impl State {
             label: None,
         });
 
+        let multisample_texture_view = &self.multisample_texture.create_default_view();
+
         {
             let mut blend_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 color_attachments: Borrowed(&[wgpu::RenderPassColorAttachmentDescriptor {
-                    attachment: &frame.output.view,
-                    resolve_target: None,
-                    // attachment: multisample_texture_view,
-                    // resolve_target: Some(resolve_target),
+                    attachment: multisample_texture_view,
+                    resolve_target: Some(&frame.output.view),
                     ops: wgpu::Operations {
                         load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                         store: true,
