@@ -1,4 +1,4 @@
-use std::io::{self, Read, Write};
+use std::io::Write;
 
 use lyon::math::point;
 use lyon::path::Path;
@@ -17,34 +17,43 @@ use futures::executor::block_on;
 use std::borrow::Cow::Borrowed;
 use wgpu::util::DeviceExt;
 
+// sample count for MSAA
 const SAMPLE_COUNT: u32 = 4;
 
 const IMAGE_DIR: &str = "img";
 
+// how many times to repeat gaussian blur
 const BLUR_COUNT: usize = 10;
 
+// exposure level used in blend.frag
 const EXPOSURE: f32 = 2.0;
 
-// The vertex type that we will use to represent a point on our triangle.
+// Vertex for lines drawn by lyon
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct Vertex {
     position: [f32; 2],
+    // colour: [f32; 4],    // Use this when I want more colors
 }
 
 unsafe impl bytemuck::Pod for Vertex {}
 unsafe impl bytemuck::Zeroable for Vertex {}
 
+// Simple vertex to draw the texture identically as the original
 #[repr(C)]
 #[derive(Clone, Copy)]
 struct BlurVertex {
     position: [f32; 2],
-    // tex_coords: [f32; 2],
 }
 
 unsafe impl bytemuck::Pod for BlurVertex {}
 unsafe impl bytemuck::Zeroable for BlurVertex {}
 
+//   *---*
+//   |  /|
+//   | / |
+//   |/  |
+//   *---*
 #[rustfmt::skip]
 const VERTICES: &[BlurVertex] = &[
     BlurVertex { position: [ 1.0,  1.0], },
@@ -56,8 +65,11 @@ const VERTICES: &[BlurVertex] = &[
     BlurVertex { position: [-1.0,  1.0], },
 ];
 
-#[repr(C)] // We need this for Rust to store our data correctly for the shaders
-#[derive(Debug, Copy, Clone)] // This is so we can store this in a buffer
+// Parameters for gaussian blur;
+// As gaussian blur is done horizontally and vertically repeadedly,
+// we need a flag to flip the orientation.
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
 struct BlurUniforms {
     horizontal: bool,
 }
@@ -75,8 +87,9 @@ impl BlurUniforms {
 unsafe impl bytemuck::Pod for BlurUniforms {}
 unsafe impl bytemuck::Zeroable for BlurUniforms {}
 
-#[repr(C)] // We need this for Rust to store our data correctly for the shaders
-#[derive(Debug, Copy, Clone)] // This is so we can store this in a buffer
+// Parameters for blending the original texture and the blurred texture
+#[repr(C)]
+#[derive(Debug, Copy, Clone)]
 struct BlendUniforms {
     exposure: f32,
 }
@@ -90,6 +103,7 @@ impl BlendUniforms {
 unsafe impl bytemuck::Pod for BlendUniforms {}
 unsafe impl bytemuck::Zeroable for BlendUniforms {}
 
+// Dimension for writing out as PNG images. The original code is at https://github.com/gfx-rs/wgpu-rs/blob/master/examples/capture/main.rs
 struct BufferDimensions {
     width: usize,
     height: usize,
@@ -138,9 +152,11 @@ struct State {
     blend_uniform_bind_group_layout: wgpu::BindGroupLayout,
     blend_render_pipeline: wgpu::RenderPipeline,
 
+    // Texture for MASS
     multisample_texture: wgpu::Texture,
     multisample_png_texture: wgpu::Texture,
 
+    // Texture for writing out as PNG
     png_texture: wgpu::Texture,
     png_buffer: wgpu::Buffer,
     png_dimensions: BufferDimensions,
