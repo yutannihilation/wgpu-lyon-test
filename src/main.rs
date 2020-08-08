@@ -23,7 +23,7 @@ const IMAGE_DIR: &str = "img";
 
 const BLUR_COUNT: usize = 50;
 
-const EXPOSURE: f32 = 3.0;
+const EXPOSURE: f32 = 1.3;
 
 // The vertex type that we will use to represent a point on our triangle.
 #[repr(C)]
@@ -526,8 +526,7 @@ impl State {
                 usage: wgpu::BufferUsage::VERTEX,
             });
 
-        let blur_count =
-            (BLUR_COUNT as f32 * (1.0 + 0.6 * (self.frame as f32 / 43.0).sin())) as usize;
+        let blur_count = BLUR_COUNT;
         for i in 0..blur_count {
             let bind_group = create_bind_group(
                 &self.device,
@@ -602,7 +601,7 @@ impl State {
             label: None,
         });
 
-        let blend_uniform = BlendUniforms::new(EXPOSURE * (self.frame as f32 / 33.0).sin());
+        let blend_uniform = BlendUniforms::new(EXPOSURE);
 
         let blend_uniform_buffer =
             self.device
@@ -677,13 +676,10 @@ impl State {
 
         self.queue.submit(Some(encoder.finish()));
 
-        if self.frame < 1000 {
+        if self.frame == 1 {
             let file = self.output_dir.clone();
             block_on(create_png(
-                &file
-                    .join(format!("{:03}.png", self.frame))
-                    .to_str()
-                    .unwrap(),
+                &file.join("test.png").to_str().unwrap(),
                 &self.device,
                 &self.png_buffer,
                 &self.png_dimensions,
