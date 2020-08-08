@@ -21,7 +21,9 @@ const SAMPLE_COUNT: u32 = 4;
 
 const IMAGE_DIR: &str = "img";
 
-const BLUR_COUNT: usize = 20;
+const BLUR_COUNT: usize = 30;
+
+const EXPOSURE: f32 = 2.0;
 
 // The vertex type that we will use to represent a point on our triangle.
 #[repr(C)]
@@ -111,7 +113,6 @@ struct State {
     // A render pipeline for blending the results
     blend_bind_group_layout: wgpu::BindGroupLayout,
     blend_uniform_bind_group_layout: wgpu::BindGroupLayout,
-    blend_uniform: BlendUniforms,
     blend_render_pipeline: wgpu::RenderPipeline,
 
     multisample_texture: wgpu::Texture,
@@ -120,6 +121,8 @@ struct State {
     size: winit::dpi::PhysicalSize<u32>,
 
     output_dir: std::path::PathBuf,
+
+    frame: u32,
 }
 
 impl State {
@@ -302,8 +305,6 @@ impl State {
                 push_constant_ranges: Borrowed(&[]),
             });
 
-        let blend_uniform = BlendUniforms::new(5.0);
-
         let staging_texture = create_framebuffer(&device, &sc_desc, 1);
 
         let multisample_texture = create_framebuffer(&device, &sc_desc, SAMPLE_COUNT);
@@ -365,7 +366,6 @@ impl State {
 
             blend_bind_group_layout,
             blend_uniform_bind_group_layout,
-            blend_uniform,
             blend_render_pipeline,
 
             multisample_texture,
@@ -373,6 +373,8 @@ impl State {
             size,
 
             output_dir,
+
+            frame: 0,
         }
     }
 
@@ -395,7 +397,9 @@ impl State {
         false
     }
 
-    fn update(&mut self) {}
+    fn update(&mut self) {
+        self.frame += 1;
+    }
 
     fn render(&mut self) {
         let frame = match self.swap_chain.get_current_frame() {
@@ -475,7 +479,9 @@ impl State {
                 usage: wgpu::BufferUsage::VERTEX,
             });
 
-        for i in 0..BLUR_COUNT {
+        let blur_count =
+            (BLUR_COUNT as f32 * (1.0 + 0.3 * (self.frame as f32 / 83.0).sin())) as usize;
+        for i in 0..blur_count {
             let bind_group = create_bind_group(
                 &self.device,
                 &self.blur_bind_group_layout,
@@ -538,7 +544,7 @@ impl State {
                 wgpu::BindGroupEntry {
                     binding: 1,
                     resource: wgpu::BindingResource::TextureView(
-                        &self.blur_textures[BLUR_COUNT % 2].create_default_view(),
+                        &self.blur_textures[blur_count % 2].create_default_view(),
                     ),
                 },
                 wgpu::BindGroupEntry {
@@ -549,11 +555,13 @@ impl State {
             label: None,
         });
 
+        let blend_uniform = BlendUniforms::new(EXPOSURE * (self.frame as f32 / 100.0).sin());
+
         let blend_uniform_buffer =
             self.device
                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: None,
-                    contents: bytemuck::cast_slice(&[self.blend_uniform]),
+                    contents: bytemuck::cast_slice(&[blend_uniform]),
                     usage: wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
                 });
 
