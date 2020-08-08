@@ -21,9 +21,9 @@ const SAMPLE_COUNT: u32 = 4;
 
 const IMAGE_DIR: &str = "img";
 
-const BLUR_COUNT: usize = 50;
+const BLUR_COUNT: usize = 10;
 
-const EXPOSURE: f32 = 3.0;
+const EXPOSURE: f32 = 2.0;
 
 // The vertex type that we will use to represent a point on our triangle.
 #[repr(C)]
@@ -139,6 +139,8 @@ struct State {
     blend_render_pipeline: wgpu::RenderPipeline,
 
     multisample_texture: wgpu::Texture,
+    multisample_blur_texture: wgpu::Texture,
+    multisample_png_texture: wgpu::Texture,
 
     png_texture: wgpu::Texture,
     png_buffer: wgpu::Buffer,
@@ -191,7 +193,7 @@ impl State {
         // create a swap chain
         let sc_desc = wgpu::SwapChainDescriptor {
             usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT,
-            format: wgpu::TextureFormat::Bgra8Unorm,
+            format: wgpu::TextureFormat::Bgra8UnormSrgb,
             width: size.width,
             height: size.height,
             present_mode: wgpu::PresentMode::Fifo,
@@ -276,8 +278,8 @@ impl State {
         let blur_uniform = BlurUniforms::new();
 
         let blur_textures = [
-            create_framebuffer(&device, &sc_desc),
-            create_framebuffer(&device, &sc_desc),
+            create_framebuffer(&device, &sc_desc, wgpu::TextureFormat::Bgra8UnormSrgb),
+            create_framebuffer(&device, &sc_desc, wgpu::TextureFormat::Bgra8UnormSrgb),
         ];
 
         let blend_bind_group_layout =
@@ -333,41 +335,45 @@ impl State {
                 push_constant_ranges: Borrowed(&[]),
             });
 
-        let staging_texture = create_framebuffer(&device, &sc_desc);
+        let staging_texture = create_framebuffer(&device, &sc_desc, sc_desc.format);
 
-        let multisample_texture = create_multisampled_framebuffer(&device, &sc_desc);
+        let multisample_texture =
+            create_multisampled_framebuffer(&device, &sc_desc, sc_desc.format);
+
+        let multisample_blur_texture =
+            create_multisampled_framebuffer(&device, &sc_desc, wgpu::TextureFormat::Bgra8UnormSrgb);
+
+        let multisample_png_texture =
+            create_multisampled_framebuffer(&device, &sc_desc, wgpu::TextureFormat::Rgba8UnormSrgb);
 
         let extract_render_pipeline = create_render_pipeline(
             &device,
             &extract_render_pipeline_layout,
-            &sc_desc,
             &device.create_shader_module(wgpu::include_spirv!("shaders/shader.vert.spv")),
             &device.create_shader_module(wgpu::include_spirv!("shaders/shader.frag.spv")),
             &wgpu::vertex_attr_array![0 => Float2],
             SAMPLE_COUNT,
-            2,
+            vec![sc_desc.format, wgpu::TextureFormat::Bgra8UnormSrgb],
         );
 
         let blur_render_pipeline = create_render_pipeline(
             &device,
             &blur_render_pipeline_layout,
-            &sc_desc,
             &device.create_shader_module(wgpu::include_spirv!("shaders/blur.vert.spv")),
             &device.create_shader_module(wgpu::include_spirv!("shaders/blur.frag.spv")),
             &wgpu::vertex_attr_array![0 => Float2, 1 => Float2],
             SAMPLE_COUNT,
-            1,
+            vec![wgpu::TextureFormat::Bgra8UnormSrgb],
         );
 
         let blend_render_pipeline = create_render_pipeline(
             &device,
             &blend_render_pipeline_layout,
-            &sc_desc,
             &device.create_shader_module(wgpu::include_spirv!("shaders/blur.vert.spv")),
             &device.create_shader_module(wgpu::include_spirv!("shaders/blend.frag.spv")),
             &wgpu::vertex_attr_array![0 => Float2],
             SAMPLE_COUNT,
-            2,
+            vec![sc_desc.format, wgpu::TextureFormat::Rgba8UnormSrgb],
         );
 
         let mut output_dir = std::path::PathBuf::new();
@@ -400,6 +406,8 @@ impl State {
             blend_render_pipeline,
 
             multisample_texture,
+            multisample_blur_texture,
+            multisample_png_texture,
 
             png_texture,
             png_buffer,
@@ -422,11 +430,30 @@ impl State {
         self.swap_chain = self.device.create_swap_chain(&self.surface, &self.sc_desc);
 
         self.blur_textures = [
-            create_framebuffer(&self.device, &self.sc_desc),
-            create_framebuffer(&self.device, &self.sc_desc),
+            create_framebuffer(
+                &self.device,
+                &self.sc_desc,
+                wgpu::TextureFormat::Bgra8UnormSrgb,
+            ),
+            create_framebuffer(
+                &self.device,
+                &self.sc_desc,
+                wgpu::TextureFormat::Bgra8UnormSrgb,
+            ),
         ];
-        self.staging_texture = create_framebuffer(&self.device, &self.sc_desc);
-        self.multisample_texture = create_multisampled_framebuffer(&self.device, &self.sc_desc);
+        self.staging_texture = create_framebuffer(&self.device, &self.sc_desc, self.sc_desc.format);
+        self.multisample_texture =
+            create_multisampled_framebuffer(&self.device, &self.sc_desc, self.sc_desc.format);
+        self.multisample_blur_texture = create_multisampled_framebuffer(
+            &self.device,
+            &self.sc_desc,
+            wgpu::TextureFormat::Bgra8UnormSrgb,
+        );
+        self.multisample_png_texture = create_multisampled_framebuffer(
+            &self.device,
+            &self.sc_desc,
+            wgpu::TextureFormat::Rgba8UnormSrgb,
+        );
 
         let (png_dimensions, png_buffer, png_texture) = create_png_texture_and_buffer(
             &self.device,
@@ -485,6 +512,8 @@ impl State {
 
         let staging_texture_view = self.staging_texture.create_default_view();
         let multisample_texture_view = self.multisample_texture.create_default_view();
+        let multisample_blur_texture_view = self.multisample_blur_texture.create_default_view();
+        let multisample_png_texture_view = self.multisample_png_texture.create_default_view();
 
         // draw into staging buffer
         {
@@ -499,7 +528,7 @@ impl State {
                         },
                     },
                     wgpu::RenderPassColorAttachmentDescriptor {
-                        attachment: &multisample_texture_view,
+                        attachment: &multisample_blur_texture_view,
                         resolve_target: Some(&blur_texture_views[0]),
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -527,7 +556,7 @@ impl State {
             });
 
         let blur_count =
-            (BLUR_COUNT as f32 * (1.0 + 0.6 * (self.frame as f32 / 43.0).sin())) as usize;
+            (BLUR_COUNT as f32 * (1.0 + 0.5 * (self.frame as f32 / 300.0).sin())) as usize;
         for i in 0..blur_count {
             let bind_group = create_bind_group(
                 &self.device,
@@ -558,7 +587,7 @@ impl State {
             {
                 let mut blur_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     color_attachments: Borrowed(&[wgpu::RenderPassColorAttachmentDescriptor {
-                        attachment: &multisample_texture_view,
+                        attachment: &multisample_blur_texture_view,
                         resolve_target: Some(&resolve_target),
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -602,7 +631,7 @@ impl State {
             label: None,
         });
 
-        let blend_uniform = BlendUniforms::new(EXPOSURE * (self.frame as f32 / 33.0).sin());
+        let blend_uniform = BlendUniforms::new(EXPOSURE * (self.frame as f32 / 30.0).sin());
 
         let blend_uniform_buffer =
             self.device
@@ -635,7 +664,7 @@ impl State {
                         },
                     },
                     wgpu::RenderPassColorAttachmentDescriptor {
-                        attachment: &multisample_texture_view,
+                        attachment: &multisample_png_texture_view,
                         resolve_target: Some(&png_texture_view),
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -677,18 +706,18 @@ impl State {
 
         self.queue.submit(Some(encoder.finish()));
 
-        if self.frame < 1000 {
-            let file = self.output_dir.clone();
-            block_on(create_png(
-                &file
-                    .join(format!("{:03}.png", self.frame))
-                    .to_str()
-                    .unwrap(),
-                &self.device,
-                &self.png_buffer,
-                &self.png_dimensions,
-            ))
-        }
+        // if self.frame < 1000 {
+        //     let file = self.output_dir.clone();
+        //     block_on(create_png(
+        //         &file
+        //             .join(format!("{:03}.png", self.frame))
+        //             .to_str()
+        //             .unwrap(),
+        //         &self.device,
+        //         &self.png_buffer,
+        //         &self.png_dimensions,
+        //     ))
+        // }
     }
 }
 
@@ -697,6 +726,7 @@ fn create_texture(
     sc_desc: &wgpu::SwapChainDescriptor,
     sample_count: u32,
     usage: wgpu::TextureUsage,
+    format: wgpu::TextureFormat,
 ) -> wgpu::Texture {
     let texture_extent = wgpu::Extent3d {
         width: sc_desc.width,
@@ -708,7 +738,7 @@ fn create_texture(
         mip_level_count: 1,
         sample_count: sample_count,
         dimension: wgpu::TextureDimension::D2,
-        format: sc_desc.format,
+        format: format,
         usage,
         label: None,
     };
@@ -716,24 +746,31 @@ fn create_texture(
     device.create_texture(frame_descriptor)
 }
 
-fn create_framebuffer(device: &wgpu::Device, sc_desc: &wgpu::SwapChainDescriptor) -> wgpu::Texture {
+fn create_framebuffer(
+    device: &wgpu::Device,
+    sc_desc: &wgpu::SwapChainDescriptor,
+    format: wgpu::TextureFormat,
+) -> wgpu::Texture {
     create_texture(
         device,
         sc_desc,
         1,
         wgpu::TextureUsage::OUTPUT_ATTACHMENT | wgpu::TextureUsage::SAMPLED,
+        format,
     )
 }
 
 fn create_multisampled_framebuffer(
     device: &wgpu::Device,
     sc_desc: &wgpu::SwapChainDescriptor,
+    format: wgpu::TextureFormat,
 ) -> wgpu::Texture {
     create_texture(
         device,
         sc_desc,
         SAMPLE_COUNT,
         wgpu::TextureUsage::OUTPUT_ATTACHMENT,
+        format,
     )
 }
 
@@ -764,16 +801,16 @@ fn create_bind_group(
 fn create_render_pipeline(
     device: &wgpu::Device,
     pipeline_layout: &wgpu::PipelineLayout,
-    sc_desc: &wgpu::SwapChainDescriptor,
     vs_mod: &wgpu::ShaderModule,
     fs_mod: &wgpu::ShaderModule,
     attr_array: &[wgpu::VertexAttributeDescriptor],
     sample_count: u32,
-    n_color_states: u32,
+    formats: Vec<wgpu::TextureFormat>,
 ) -> wgpu::RenderPipeline {
-    let v: Vec<_> = (0..n_color_states)
-        .map(|_| wgpu::ColorStateDescriptor {
-            format: sc_desc.format,
+    let v: Vec<_> = formats
+        .iter()
+        .map(|format| wgpu::ColorStateDescriptor {
+            format: *format,
             color_blend: wgpu::BlendDescriptor::REPLACE,
             alpha_blend: wgpu::BlendDescriptor::REPLACE,
             write_mask: wgpu::ColorWrite::ALL,
