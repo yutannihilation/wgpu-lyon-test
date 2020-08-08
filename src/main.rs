@@ -376,7 +376,7 @@ impl State {
             &device.create_shader_module(wgpu::include_spirv!("shaders/shader.vert.spv")),
             &device.create_shader_module(wgpu::include_spirv!("shaders/shader.frag.spv")),
             &wgpu::vertex_attr_array![0 => Float2],
-            1,
+            SAMPLE_COUNT,
             2,
         );
 
@@ -516,22 +516,23 @@ impl State {
         ];
 
         let staging_texture_view = self.staging_texture.create_default_view();
+        let multisample_texture_view = self.multisample_texture.create_default_view();
 
         // draw into staging buffer
         {
             let mut extract_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 color_attachments: Borrowed(&[
                     wgpu::RenderPassColorAttachmentDescriptor {
-                        attachment: &staging_texture_view,
-                        resolve_target: None,
+                        attachment: &multisample_texture_view,
+                        resolve_target: Some(&staging_texture_view),
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                             store: true,
                         },
                     },
                     wgpu::RenderPassColorAttachmentDescriptor {
-                        attachment: &blur_texture_views[0],
-                        resolve_target: None,
+                        attachment: &multisample_texture_view,
+                        resolve_target: Some(&blur_texture_views[0]),
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
                             store: true,
@@ -585,11 +586,11 @@ impl State {
                 });
             self.blur_uniform.flip();
 
-            let resolve_target = &self.blur_textures[(i + 1) % 2].create_default_view();
+            let resolve_target = self.blur_textures[(i + 1) % 2].create_default_view();
             {
                 let mut blur_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     color_attachments: Borrowed(&[wgpu::RenderPassColorAttachmentDescriptor {
-                        attachment: resolve_target,
+                        attachment: &resolve_target,
                         resolve_target: None,
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -654,13 +655,11 @@ impl State {
 
         let png_texture_view = &self.png_texture.create_default_view();
 
-        let multisample_texture_view = &self.multisample_texture.create_default_view();
-
         {
             let mut blend_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 color_attachments: Borrowed(&[
                     wgpu::RenderPassColorAttachmentDescriptor {
-                        attachment: multisample_texture_view,
+                        attachment: &multisample_texture_view,
                         resolve_target: Some(&frame.output.view),
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -668,7 +667,7 @@ impl State {
                         },
                     },
                     wgpu::RenderPassColorAttachmentDescriptor {
-                        attachment: multisample_texture_view,
+                        attachment: &multisample_texture_view,
                         resolve_target: Some(&png_texture_view),
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
