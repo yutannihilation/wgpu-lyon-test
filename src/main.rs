@@ -139,7 +139,6 @@ struct State {
     blend_render_pipeline: wgpu::RenderPipeline,
 
     multisample_texture: wgpu::Texture,
-    multisample_blur_texture: wgpu::Texture,
     multisample_png_texture: wgpu::Texture,
 
     png_texture: wgpu::Texture,
@@ -278,8 +277,8 @@ impl State {
         let blur_uniform = BlurUniforms::new();
 
         let blur_textures = [
-            create_framebuffer(&device, &sc_desc, wgpu::TextureFormat::Bgra8Unorm),
-            create_framebuffer(&device, &sc_desc, wgpu::TextureFormat::Bgra8Unorm),
+            create_framebuffer(&device, &sc_desc, sc_desc.format),
+            create_framebuffer(&device, &sc_desc, sc_desc.format),
         ];
 
         let blend_bind_group_layout =
@@ -340,9 +339,6 @@ impl State {
         let multisample_texture =
             create_multisampled_framebuffer(&device, &sc_desc, sc_desc.format);
 
-        let multisample_blur_texture =
-            create_multisampled_framebuffer(&device, &sc_desc, wgpu::TextureFormat::Bgra8Unorm);
-
         let multisample_png_texture =
             create_multisampled_framebuffer(&device, &sc_desc, wgpu::TextureFormat::Rgba8UnormSrgb);
 
@@ -353,7 +349,7 @@ impl State {
             &device.create_shader_module(wgpu::include_spirv!("shaders/shader.frag.spv")),
             &wgpu::vertex_attr_array![0 => Float2],
             SAMPLE_COUNT,
-            vec![sc_desc.format, wgpu::TextureFormat::Bgra8Unorm],
+            vec![sc_desc.format, sc_desc.format],
         );
 
         let blur_render_pipeline = create_render_pipeline(
@@ -363,7 +359,7 @@ impl State {
             &device.create_shader_module(wgpu::include_spirv!("shaders/blur.frag.spv")),
             &wgpu::vertex_attr_array![0 => Float2, 1 => Float2],
             SAMPLE_COUNT,
-            vec![wgpu::TextureFormat::Bgra8Unorm],
+            vec![sc_desc.format],
         );
 
         let blend_render_pipeline = create_render_pipeline(
@@ -406,7 +402,6 @@ impl State {
             blend_render_pipeline,
 
             multisample_texture,
-            multisample_blur_texture,
             multisample_png_texture,
 
             png_texture,
@@ -430,17 +425,12 @@ impl State {
         self.swap_chain = self.device.create_swap_chain(&self.surface, &self.sc_desc);
 
         self.blur_textures = [
-            create_framebuffer(&self.device, &self.sc_desc, wgpu::TextureFormat::Bgra8Unorm),
-            create_framebuffer(&self.device, &self.sc_desc, wgpu::TextureFormat::Bgra8Unorm),
+            create_framebuffer(&self.device, &self.sc_desc, self.sc_desc.format),
+            create_framebuffer(&self.device, &self.sc_desc, self.sc_desc.format),
         ];
         self.staging_texture = create_framebuffer(&self.device, &self.sc_desc, self.sc_desc.format);
         self.multisample_texture =
             create_multisampled_framebuffer(&self.device, &self.sc_desc, self.sc_desc.format);
-        self.multisample_blur_texture = create_multisampled_framebuffer(
-            &self.device,
-            &self.sc_desc,
-            wgpu::TextureFormat::Bgra8Unorm,
-        );
         self.multisample_png_texture = create_multisampled_framebuffer(
             &self.device,
             &self.sc_desc,
@@ -504,7 +494,6 @@ impl State {
 
         let staging_texture_view = self.staging_texture.create_default_view();
         let multisample_texture_view = self.multisample_texture.create_default_view();
-        let multisample_blur_texture_view = self.multisample_blur_texture.create_default_view();
         let multisample_png_texture_view = self.multisample_png_texture.create_default_view();
 
         // draw into staging buffer
@@ -520,7 +509,7 @@ impl State {
                         },
                     },
                     wgpu::RenderPassColorAttachmentDescriptor {
-                        attachment: &multisample_blur_texture_view,
+                        attachment: &multisample_texture_view,
                         resolve_target: Some(&blur_texture_views[0]),
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -579,7 +568,7 @@ impl State {
             {
                 let mut blur_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     color_attachments: Borrowed(&[wgpu::RenderPassColorAttachmentDescriptor {
-                        attachment: &multisample_blur_texture_view,
+                        attachment: &multisample_texture_view,
                         resolve_target: Some(&resolve_target),
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
