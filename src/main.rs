@@ -248,8 +248,8 @@ impl State {
         let blur_uniform = BlurUniforms::new();
 
         let blur_textures = [
-            create_framebuffer(&device, &sc_desc, 1),
-            create_framebuffer(&device, &sc_desc, 1),
+            create_framebuffer(&device, &sc_desc),
+            create_framebuffer(&device, &sc_desc),
         ];
 
         let blend_bind_group_layout =
@@ -305,9 +305,9 @@ impl State {
                 push_constant_ranges: Borrowed(&[]),
             });
 
-        let staging_texture = create_framebuffer(&device, &sc_desc, 1);
+        let staging_texture = create_framebuffer(&device, &sc_desc);
 
-        let multisample_texture = create_framebuffer(&device, &sc_desc, SAMPLE_COUNT);
+        let multisample_texture = create_multisampled_framebuffer(&device, &sc_desc);
 
         let extract_render_pipeline = create_render_pipeline(
             &device,
@@ -386,11 +386,11 @@ impl State {
         self.swap_chain = self.device.create_swap_chain(&self.surface, &self.sc_desc);
 
         self.blur_textures = [
-            create_framebuffer(&self.device, &self.sc_desc, 1),
-            create_framebuffer(&self.device, &self.sc_desc, 1),
+            create_framebuffer(&self.device, &self.sc_desc),
+            create_framebuffer(&self.device, &self.sc_desc),
         ];
-        self.staging_texture = create_framebuffer(&self.device, &self.sc_desc, 1);
-        self.multisample_texture = create_framebuffer(&self.device, &self.sc_desc, SAMPLE_COUNT);
+        self.staging_texture = create_framebuffer(&self.device, &self.sc_desc);
+        self.multisample_texture = create_multisampled_framebuffer(&self.device, &self.sc_desc);
     }
 
     fn input(&mut self, _: &WindowEvent) -> bool {
@@ -401,7 +401,7 @@ impl State {
         self.frame += 1;
     }
 
-    fn render(&mut self) {
+    async fn render(&mut self) {
         let frame = match self.swap_chain.get_current_frame() {
             Ok(frame) => frame,
             Err(_) => {
@@ -597,20 +597,67 @@ impl State {
             blend_render_pass.draw(0..VERTICES.len() as u32, 0..1);
         }
 
+        if self.frame > 100 {
+            return;
+        }
+        let file = self.output_dir.clone();
+        // we need to store this for later
+        let u32_size = std::mem::size_of::<u32>() as u32;
+
+        // derived from https://sotrh.github.io/learn-wgpu/showcase/windowless/#a-triangle-without-a-window
+        let output_buffer_size =
+            (u32_size * self.sc_desc.width * self.sc_desc.height * SAMPLE_COUNT)
+                as wgpu::BufferAddress;
+        let output_buffer_desc = wgpu::BufferDescriptor {
+            size: output_buffer_size,
+            usage: wgpu::BufferUsage::COPY_DST | wgpu::BufferUsage::MAP_READ,
+            label: None,
+            mapped_at_creation: false,
+        };
+        let output_buffer = self.device.create_buffer(&output_buffer_desc);
+
+        encoder.copy_texture_to_buffer(
+            wgpu::TextureCopyView {
+                texture: &self.multisample_texture,
+                mip_level: 0,
+                origin: wgpu::Origin3d::ZERO,
+            },
+            wgpu::BufferCopyView {
+                buffer: &output_buffer,
+                layout: wgpu::TextureDataLayout {
+                    offset: 0,
+                    bytes_per_row: u32_size * self.sc_desc.width * SAMPLE_COUNT / 2,
+                    rows_per_image: self.sc_desc.height * SAMPLE_COUNT / 2,
+                },
+            },
+            wgpu::Extent3d {
+                width: self.sc_desc.width,
+                height: self.sc_desc.height,
+                depth: 1,
+            },
+        );
+
         self.queue.submit(Some(encoder.finish()));
 
-        // TOOD:
-        // if self.frame < 1000 {
-        //     let file = self.output_dir.clone();
-        //     create_png(file.join(format!("{:03}.png", self.frame)), &self.device, &);
-        // }
+        create_png(
+            &file
+                .join(format!("{:03}.png", self.frame))
+                .to_str()
+                .unwrap(),
+            &self.device,
+            output_buffer,
+            self.sc_desc.width * SAMPLE_COUNT / 2,
+            self.sc_desc.height * SAMPLE_COUNT / 2,
+        )
+        .await
     }
 }
 
-fn create_framebuffer(
+fn create_texture(
     device: &wgpu::Device,
     sc_desc: &wgpu::SwapChainDescriptor,
     sample_count: u32,
+    usage: wgpu::TextureUsage,
 ) -> wgpu::Texture {
     let texture_extent = wgpu::Extent3d {
         width: sc_desc.width,
@@ -623,11 +670,34 @@ fn create_framebuffer(
         sample_count: sample_count,
         dimension: wgpu::TextureDimension::D2,
         format: sc_desc.format,
-        usage: wgpu::TextureUsage::OUTPUT_ATTACHMENT | wgpu::TextureUsage::SAMPLED,
+        usage,
         label: None,
     };
 
     device.create_texture(frame_descriptor)
+}
+
+fn create_framebuffer(device: &wgpu::Device, sc_desc: &wgpu::SwapChainDescriptor) -> wgpu::Texture {
+    create_texture(
+        device,
+        sc_desc,
+        1,
+        wgpu::TextureUsage::OUTPUT_ATTACHMENT | wgpu::TextureUsage::SAMPLED,
+    )
+}
+
+fn create_multisampled_framebuffer(
+    device: &wgpu::Device,
+    sc_desc: &wgpu::SwapChainDescriptor,
+) -> wgpu::Texture {
+    create_texture(
+        device,
+        sc_desc,
+        SAMPLE_COUNT,
+        // COPY_SRC is usually not needed for multisample texture, but this example uses
+        //  multisample texture also as a source to copy to an output buffer.
+        wgpu::TextureUsage::OUTPUT_ATTACHMENT | wgpu::TextureUsage::COPY_SRC,
+    )
 }
 
 fn create_bind_group(
@@ -709,7 +779,7 @@ fn create_render_pipeline(
 // The original code is https://github.com/gfx-rs/wgpu-rs/blob/8e4d0015862507027f3a6bd68056c64568d11366/examples/capture/main.rs#L122-L194
 async fn create_png(
     png_output_path: &str,
-    device: wgpu::Device,
+    device: &wgpu::Device,
     output_buffer: wgpu::Buffer,
     width: u32,
     height: u32,
@@ -799,7 +869,7 @@ fn main() {
             }
             Event::RedrawRequested(_) => {
                 state.update();
-                state.render();
+                block_on(state.render());
             }
             Event::MainEventsCleared => {
                 // RedrawRequested will only trigger once, unless we manually
