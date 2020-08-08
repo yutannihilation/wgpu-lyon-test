@@ -612,7 +612,8 @@ impl State {
             label: None,
         });
 
-        let blend_uniform = BlendUniforms::new(EXPOSURE * (self.frame as f32 / 30.0).sin());
+        let blend_uniform =
+            BlendUniforms::new(EXPOSURE * (1.0 + 0.3 * self.frame as f32 / 30.0).sin());
 
         let blend_uniform_buffer =
             self.device
@@ -687,18 +688,18 @@ impl State {
 
         self.queue.submit(Some(encoder.finish()));
 
-        // if self.frame < 1000 {
-        //     let file = self.output_dir.clone();
-        //     block_on(create_png(
-        //         &file
-        //             .join(format!("{:03}.png", self.frame))
-        //             .to_str()
-        //             .unwrap(),
-        //         &self.device,
-        //         &self.png_buffer,
-        //         &self.png_dimensions,
-        //     ))
-        // }
+        if self.frame < 1000 {
+            let file = self.output_dir.clone();
+            block_on(create_png(
+                &file
+                    .join(format!("{:03}.png", self.frame))
+                    .to_str()
+                    .unwrap(),
+                &self.device,
+                &self.png_buffer,
+                &self.png_dimensions,
+            ))
+        }
     }
 }
 
