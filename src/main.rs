@@ -155,7 +155,7 @@ struct State {
 
     // Texture for MASS
     multisample_texture: wgpu::Texture,
-    multisample_png_texture: wgpu::Texture,
+    multisample_png_texture: wgpu::Texture, // a texture for PNG has a different TextureFormat, so we need another multisampled texture than others
 
     // Texture for writing out as PNG
     png_texture: wgpu::Texture,
@@ -561,10 +561,13 @@ impl State {
         let blur_count =
             (BLUR_COUNT as f32 * (1.0 + 0.5 * (self.frame as f32 / 300.0).sin())) as usize;
         for i in 0..blur_count {
+            let src_texture = &self.blur_textures[i % 2];
+            let dst_texture = &self.blur_textures[(i + 1) % 2];
+
             let bind_group = create_bind_group(
                 &self.device,
                 &self.blur_bind_group_layout,
-                &self.blur_textures[i % 2],
+                src_texture,
                 &sampler,
             );
 
@@ -573,7 +576,7 @@ impl State {
                     .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                         label: None,
                         contents: bytemuck::cast_slice(&[self.blur_uniform]),
-                        usage: wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
+                        usage: wgpu::BufferUsage::UNIFORM,
                     });
 
             let blur_uniform_bind_group =
@@ -585,9 +588,11 @@ impl State {
                     }]),
                     label: None,
                 });
+
+            // Flip the orientation between horizontally and vertically
             self.blur_uniform.flip();
 
-            let resolve_target = self.blur_textures[(i + 1) % 2].create_default_view();
+            let resolve_target = dst_texture.create_default_view();
             {
                 let mut blur_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     color_attachments: Borrowed(&[wgpu::RenderPassColorAttachmentDescriptor {
@@ -617,10 +622,12 @@ impl State {
             entries: Borrowed(&[
                 wgpu::BindGroupEntry {
                     binding: 0,
+                    // a texture that contains the unmodified version
                     resource: wgpu::BindingResource::TextureView(&staging_texture_view),
                 },
                 wgpu::BindGroupEntry {
                     binding: 1,
+                    // a texture that contains the last result of gaussian blur
                     resource: wgpu::BindingResource::TextureView(
                         &self.blur_textures[blur_count % 2].create_default_view(),
                     ),
@@ -641,7 +648,7 @@ impl State {
                 .create_buffer_init(&wgpu::util::BufferInitDescriptor {
                     label: None,
                     contents: bytemuck::cast_slice(&[blend_uniform]),
-                    usage: wgpu::BufferUsage::UNIFORM | wgpu::BufferUsage::COPY_DST,
+                    usage: wgpu::BufferUsage::UNIFORM,
                 });
 
         let blend_uniform_bind_group = self.device.create_bind_group(&wgpu::BindGroupDescriptor {
