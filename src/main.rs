@@ -215,9 +215,36 @@ impl State {
         };
         let swap_chain = device.create_swap_chain(&surface, &sc_desc);
 
-        // Build a Path.
+        // Build a besier line VertexBuffer using lyon
         let geometry = create_lyon_geometry();
 
+        // Extract ------------------------------------------------------------------------------------------------------------------
+        //
+        // Extract render pipeline just draw vertex buffer to two textures, so no bind groups are needed
+        let extract_render_pipeline_layout =
+            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+                bind_group_layouts: Borrowed(&[]),
+                push_constant_ranges: Borrowed(&[]),
+            });
+
+        let extract_render_pipeline = create_render_pipeline(
+            &device,
+            &extract_render_pipeline_layout,
+            &device.create_shader_module(wgpu::include_spirv!("shaders/shader.vert.spv")),
+            &device.create_shader_module(wgpu::include_spirv!("shaders/shader.frag.spv")),
+            &wgpu::vertex_attr_array![0 => Float2],
+            SAMPLE_COUNT,
+            vec![sc_desc.format, sc_desc.format],
+        );
+
+        // Texture to draw the unmodified version
+        let staging_texture = create_framebuffer(&device, &sc_desc, sc_desc.format);
+
+        // Blur ----------------------------------------------------------------------------------------------------------------------
+        //
+        // Blur render pipeline needs two bind groups:
+        //   - A bind group for texture containing the bright part of the drawing
+        //   - A bind group for parameters of gaussian blur
         let blur_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 entries: Borrowed(&[
@@ -252,14 +279,6 @@ impl State {
                 label: None,
             });
 
-        // For staging buffer, we don't use bindgroups
-        let extract_render_pipeline_layout =
-            device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
-                bind_group_layouts: Borrowed(&[]),
-                push_constant_ranges: Borrowed(&[]),
-            });
-
-        // For blur, we do use bind_group_layout
         let blur_render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 bind_group_layouts: Borrowed(&[
@@ -269,13 +288,30 @@ impl State {
                 push_constant_ranges: Borrowed(&[]),
             });
 
+        // Parameters for blur
         let blur_uniform = BlurUniforms::new();
 
+        // Textures to process gaussian blur in a ping-pong manner
         let blur_textures = [
             create_framebuffer(&device, &sc_desc, sc_desc.format),
             create_framebuffer(&device, &sc_desc, sc_desc.format),
         ];
 
+        let blur_render_pipeline = create_render_pipeline(
+            &device,
+            &blur_render_pipeline_layout,
+            &device.create_shader_module(wgpu::include_spirv!("shaders/blur.vert.spv")),
+            &device.create_shader_module(wgpu::include_spirv!("shaders/blur.frag.spv")),
+            &wgpu::vertex_attr_array![0 => Float2, 1 => Float2],
+            SAMPLE_COUNT,
+            vec![sc_desc.format],
+        );
+
+        // Blend ------------------------------------------------------------------------------------------------------------------
+        //
+        // Blend render pipeline needs two bind groups
+        //   - A bind group for texture to blend
+        //   - A bind group for parameters of blending
         let blend_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 entries: Borrowed(&[
@@ -306,6 +342,7 @@ impl State {
                 label: None,
             });
 
+        // Parameters for blend
         let blend_uniform_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
                 entries: Borrowed(&[wgpu::BindGroupLayoutEntry::new(
@@ -319,7 +356,6 @@ impl State {
                 label: None,
             });
 
-        // For blur, we do use bind_group_layout
         let blend_render_pipeline_layout =
             device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
                 bind_group_layouts: Borrowed(&[
@@ -329,34 +365,6 @@ impl State {
                 push_constant_ranges: Borrowed(&[]),
             });
 
-        let staging_texture = create_framebuffer(&device, &sc_desc, sc_desc.format);
-
-        let multisample_texture =
-            create_multisampled_framebuffer(&device, &sc_desc, sc_desc.format);
-
-        let multisample_png_texture =
-            create_multisampled_framebuffer(&device, &sc_desc, wgpu::TextureFormat::Rgba8UnormSrgb);
-
-        let extract_render_pipeline = create_render_pipeline(
-            &device,
-            &extract_render_pipeline_layout,
-            &device.create_shader_module(wgpu::include_spirv!("shaders/shader.vert.spv")),
-            &device.create_shader_module(wgpu::include_spirv!("shaders/shader.frag.spv")),
-            &wgpu::vertex_attr_array![0 => Float2],
-            SAMPLE_COUNT,
-            vec![sc_desc.format, sc_desc.format],
-        );
-
-        let blur_render_pipeline = create_render_pipeline(
-            &device,
-            &blur_render_pipeline_layout,
-            &device.create_shader_module(wgpu::include_spirv!("shaders/blur.vert.spv")),
-            &device.create_shader_module(wgpu::include_spirv!("shaders/blur.frag.spv")),
-            &wgpu::vertex_attr_array![0 => Float2, 1 => Float2],
-            SAMPLE_COUNT,
-            vec![sc_desc.format],
-        );
-
         let blend_render_pipeline = create_render_pipeline(
             &device,
             &blend_render_pipeline_layout,
@@ -364,15 +372,26 @@ impl State {
             &device.create_shader_module(wgpu::include_spirv!("shaders/blend.frag.spv")),
             &wgpu::vertex_attr_array![0 => Float2],
             SAMPLE_COUNT,
-            vec![sc_desc.format, wgpu::TextureFormat::Rgba8UnormSrgb],
+            vec![sc_desc.format, wgpu::TextureFormat::Rgba8UnormSrgb], // Texture to write out as PNG needs to be in RGBA format
         );
 
+        // MSAA --------------------------------------------------------------------------------------------------------
+        let multisample_texture =
+            create_multisampled_framebuffer(&device, &sc_desc, sc_desc.format);
+
+        let multisample_png_texture =
+            create_multisampled_framebuffer(&device, &sc_desc, wgpu::TextureFormat::Rgba8UnormSrgb);
+
+        // PNG output ----------------------------------------------------------------------------------------------------
+
+        // Output dir
         let mut output_dir = std::path::PathBuf::new();
         output_dir.push(IMAGE_DIR);
         if !output_dir.is_dir() {
             std::fs::create_dir(output_dir.clone()).unwrap();
         }
 
+        // PNG size, buffer, and texture
         let (png_dimensions, png_buffer, png_texture) =
             create_png_texture_and_buffer(&device, sc_desc.width as usize, sc_desc.height as usize);
 
