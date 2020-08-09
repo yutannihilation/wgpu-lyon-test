@@ -156,7 +156,7 @@ struct State {
     blend_render_pipeline: wgpu::RenderPipeline,
 
     // Texture for MASS
-    multisample_texture: wgpu::Texture,
+    multisample_texture: [wgpu::Texture; 2],
     multisample_png_texture: wgpu::Texture, // a texture for PNG has a different TextureFormat, so we need another multisampled texture than others
 
     // Texture for writing out as PNG
@@ -389,8 +389,10 @@ impl State {
         );
 
         // MSAA --------------------------------------------------------------------------------------------------------
-        let multisample_texture =
-            create_multisampled_framebuffer(&device, &sc_desc, sc_desc.format);
+        let multisample_texture = [
+            create_multisampled_framebuffer(&device, &sc_desc, sc_desc.format),
+            create_multisampled_framebuffer(&device, &sc_desc, sc_desc.format),
+        ];
 
         let multisample_png_texture =
             create_multisampled_framebuffer(&device, &sc_desc, wgpu::TextureFormat::Rgba8UnormSrgb);
@@ -458,8 +460,10 @@ impl State {
             create_framebuffer(&self.device, &self.sc_desc, self.sc_desc.format),
         ];
         self.staging_texture = create_framebuffer(&self.device, &self.sc_desc, self.sc_desc.format);
-        self.multisample_texture =
-            create_multisampled_framebuffer(&self.device, &self.sc_desc, self.sc_desc.format);
+        self.multisample_texture = [
+            create_multisampled_framebuffer(&self.device, &self.sc_desc, self.sc_desc.format),
+            create_multisampled_framebuffer(&self.device, &self.sc_desc, self.sc_desc.format),
+        ];
         self.multisample_png_texture = create_multisampled_framebuffer(
             &self.device,
             &self.sc_desc,
@@ -527,7 +531,10 @@ impl State {
             self.blur_textures[0].create_default_view(),
             self.blur_textures[1].create_default_view(),
         ];
-        let multisample_texture_view = self.multisample_texture.create_default_view();
+        let multisample_texture_view = [
+            self.multisample_texture[0].create_default_view(),
+            self.multisample_texture[1].create_default_view(),
+        ];
 
         // A sampler for textures
         let sampler = &self
@@ -540,7 +547,7 @@ impl State {
             let mut extract_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 color_attachments: Borrowed(&[
                     wgpu::RenderPassColorAttachmentDescriptor {
-                        attachment: &multisample_texture_view,
+                        attachment: &multisample_texture_view[0],
                         resolve_target: Some(&staging_texture_view),
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -548,7 +555,7 @@ impl State {
                         },
                     },
                     wgpu::RenderPassColorAttachmentDescriptor {
-                        attachment: &multisample_texture_view,
+                        attachment: &multisample_texture_view[1],
                         resolve_target: Some(&blur_texture_views[0]),
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -607,7 +614,7 @@ impl State {
             {
                 let mut blur_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                     color_attachments: Borrowed(&[wgpu::RenderPassColorAttachmentDescriptor {
-                        attachment: &multisample_texture_view,
+                        attachment: &multisample_texture_view[0],
                         resolve_target: Some(&resolve_target),
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),
@@ -680,7 +687,7 @@ impl State {
             let mut blend_render_pass = encoder.begin_render_pass(&wgpu::RenderPassDescriptor {
                 color_attachments: Borrowed(&[
                     wgpu::RenderPassColorAttachmentDescriptor {
-                        attachment: &multisample_texture_view,
+                        attachment: &multisample_texture_view[0],
                         resolve_target: Some(&frame.output.view),
                         ops: wgpu::Operations {
                             load: wgpu::LoadOp::Clear(wgpu::Color::BLACK),

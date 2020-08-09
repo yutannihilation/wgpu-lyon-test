@@ -8,7 +8,7 @@ void main() {
     float brightness = dot(f_color.rgb, vec3(0.2126, 0.7152, 0.0722));
 
     // TODO: needs to adjust to proper brightness
-    if (brightness > 0.1)
+    if (brightness > 0.2)
         b_color = vec4(f_color.rgb, 1.0);
     else
         b_color = vec4(0.0, 0.0, 0.0, 1.0);
