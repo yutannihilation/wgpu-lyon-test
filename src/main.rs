@@ -483,7 +483,7 @@ impl State {
 
     fn update(&mut self) {
         self.frame += 1;
-        if self.frame > 1000 {
+        if self.record & (self.frame > 1000) {
             println!("End recording");
             self.frame = 0;
             self.record = false;
@@ -1017,8 +1017,9 @@ fn main() {
                                 virtual_keycode: Some(VirtualKeyCode::R),
                                 ..
                             } => {
+                                state.frame = 0;
+                                state.record = true;
                                 println!("Start recording");
-                                state.record = true
                             }
                             _ => {}
                         },
