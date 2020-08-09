@@ -171,6 +171,7 @@ struct State {
     output_dir: std::path::PathBuf,
 
     frame: u32,
+    record: bool,
 }
 
 impl State {
@@ -441,6 +442,7 @@ impl State {
             output_dir,
 
             frame: 0,
+            record: false,
         }
     }
 
@@ -481,6 +483,11 @@ impl State {
 
     fn update(&mut self) {
         self.frame += 1;
+        if self.frame > 1000 {
+            println!("End recording");
+            self.frame = 0;
+            self.record = false;
+        }
     }
 
     fn render(&mut self) {
@@ -723,7 +730,7 @@ impl State {
 
         self.queue.submit(Some(encoder.finish()));
 
-        if self.frame < 1000 {
+        if self.record {
             let file = self.output_dir.clone();
             block_on(create_png(
                 &file
@@ -1005,6 +1012,14 @@ fn main() {
                                 virtual_keycode: Some(VirtualKeyCode::Escape),
                                 ..
                             } => *control_flow = ControlFlow::Exit,
+                            KeyboardInput {
+                                state: ElementState::Pressed,
+                                virtual_keycode: Some(VirtualKeyCode::R),
+                                ..
+                            } => {
+                                println!("Start recording");
+                                state.record = true
+                            }
                             _ => {}
                         },
                         _ => {}
