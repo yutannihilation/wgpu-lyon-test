@@ -33,7 +33,7 @@ const EXPOSURE: f32 = 2.0;
 #[derive(Clone, Copy)]
 struct Vertex {
     position: [f32; 2],
-    // colour: [f32; 4],    // Use this when I want more colors
+    // color: [f32; 4],    // Use this when I want more colors
 }
 
 unsafe impl bytemuck::Pod for Vertex {}
@@ -216,28 +216,7 @@ impl State {
         let swap_chain = device.create_swap_chain(&surface, &sc_desc);
 
         // Build a Path.
-        let mut builder = Path::builder();
-        builder.begin(point(-0.8, -0.3));
-        builder.quadratic_bezier_to(point(1.5, 2.3), point(0.2, -0.9));
-        builder.end(false);
-        let path = builder.build();
-
-        let mut geometry: VertexBuffers<Vertex, u16> = VertexBuffers::new();
-
-        let tolerance = 0.0001;
-
-        let mut stroke_tess = StrokeTessellator::new();
-        stroke_tess
-            .tessellate_path(
-                &path,
-                &StrokeOptions::tolerance(tolerance).with_line_width(0.13),
-                &mut BuffersBuilder::new(&mut geometry, |vertex: tessellation::StrokeVertex| {
-                    Vertex {
-                        position: vertex.position().to_array(),
-                    }
-                }),
-            )
-            .unwrap();
+        let geometry = create_lyon_geometry();
 
         let blur_bind_group_layout =
             device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
@@ -717,6 +696,31 @@ impl State {
             ))
         }
     }
+}
+
+fn create_lyon_geometry() -> VertexBuffers<Vertex, u16> {
+    let mut builder = Path::builder();
+    builder.begin(point(-0.8, -0.3));
+    builder.quadratic_bezier_to(point(1.5, 2.3), point(0.2, -0.9));
+    builder.end(false);
+    let path = builder.build();
+
+    let mut geometry: VertexBuffers<Vertex, u16> = VertexBuffers::new();
+
+    let tolerance = 0.0001;
+
+    let mut stroke_tess = StrokeTessellator::new();
+    stroke_tess
+        .tessellate_path(
+            &path,
+            &StrokeOptions::tolerance(tolerance).with_line_width(0.13),
+            &mut BuffersBuilder::new(&mut geometry, |vertex: tessellation::StrokeVertex| Vertex {
+                position: vertex.position().to_array(),
+            }),
+        )
+        .unwrap();
+
+    geometry
 }
 
 fn create_texture(
