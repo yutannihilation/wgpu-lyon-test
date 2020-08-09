@@ -8,11 +8,10 @@ layout(set = 0, binding = 0) uniform texture2D t_base;   // original texture
 layout(set = 0, binding = 1) uniform texture2D t_blur;   // blur texture
 layout(set = 0, binding = 2) uniform sampler s_base;
 
-const float gamma = 2.2;
-
 layout(set = 1, binding = 0)
 uniform Uniforms {
     float exposure;
+    float gamma;
 };
 
 void main() {

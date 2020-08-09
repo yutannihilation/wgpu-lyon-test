@@ -27,6 +27,8 @@ const BLUR_COUNT: usize = 10;
 
 // exposure level used in blend.frag
 const EXPOSURE: f32 = 2.0;
+// gamma correction used in blend.frag
+const GAMMA: f32 = 1.0;
 
 // Vertex for lines drawn by lyon
 #[repr(C)]
@@ -49,11 +51,10 @@ struct BlurVertex {
 unsafe impl bytemuck::Pod for BlurVertex {}
 unsafe impl bytemuck::Zeroable for BlurVertex {}
 
-//   *---*
-//   |  /|
-//   | / |
-//   |/  |
-//   *---*
+//   4-1
+//   |/|
+//   2-3
+//
 #[rustfmt::skip]
 const VERTICES: &[BlurVertex] = &[
     BlurVertex { position: [ 1.0,  1.0], },
@@ -92,11 +93,12 @@ unsafe impl bytemuck::Zeroable for BlurUniforms {}
 #[derive(Debug, Copy, Clone)]
 struct BlendUniforms {
     exposure: f32,
+    gamma: f32,
 }
 
 impl BlendUniforms {
-    fn new(exposure: f32) -> Self {
-        Self { exposure }
+    fn new(exposure: f32, gamma: f32) -> Self {
+        Self { exposure, gamma }
     }
 }
 
@@ -358,7 +360,9 @@ impl State {
                     wgpu::ShaderStage::FRAGMENT,
                     wgpu::BindingType::UniformBuffer {
                         dynamic: false,
-                        min_binding_size: wgpu::BufferSize::new(std::mem::size_of::<f32>() as _),
+                        min_binding_size: wgpu::BufferSize::new(
+                            (std::mem::size_of::<f32>() * 2) as _,
+                        ),
                     },
                 )]),
                 label: None,
@@ -640,8 +644,10 @@ impl State {
             label: None,
         });
 
-        let blend_uniform =
-            BlendUniforms::new(EXPOSURE * (1.0 + 0.3 * self.frame as f32 / 30.0).sin());
+        let blend_uniform = BlendUniforms::new(
+            EXPOSURE * (1.0 + 0.3 * self.frame as f32 / 30.0).sin(),
+            GAMMA,
+        );
 
         let blend_uniform_buffer =
             self.device
